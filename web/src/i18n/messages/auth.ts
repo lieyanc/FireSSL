@@ -1,0 +1,91 @@
+import { defineMessages } from "@/i18n/define"
+
+export const auth = defineMessages({
+  en: {
+    username: "Username",
+    password: "Password",
+    confirmPassword: "Confirm password",
+    showPassword: "Show password",
+    hidePassword: "Hide password",
+    login: {
+      title: "Sign in",
+      description: "Sign in to manage your FireSSL instance.",
+      submit: "Sign in",
+      submitting: "Signing in…",
+      invalid: "Incorrect username or password.",
+      rateLimited: "Too many failed attempts. Try again in {seconds}s.",
+      rateLimitedNoWait: "Too many failed attempts. Try again later.",
+      recover: "Recover with a setup token",
+    },
+    setup: {
+      title: "Welcome to FireSSL",
+      description: "Create the administrator account to finish setup.",
+      token: "Setup token",
+      tokenPlaceholder: "Paste the setup token",
+      tokenHelp:
+        "A one-time setup token is printed in the server log when FireSSL starts without an administrator. Check the console output or the service journal (journalctl -u firessl).",
+      tokenInvalid:
+        "The setup token is invalid. Copy it again from the server log.",
+      alreadyInitialized: "An administrator already exists. Please sign in.",
+      submit: "Create account",
+      submitting: "Creating…",
+      success: "Administrator account created",
+      recoveryTitle: "Recover administrator access",
+      recoveryDescription:
+        "Account recovery is enabled. Enter the setup token from the server log to set a new administrator username and password.",
+      recoverySubmit: "Recover access",
+      recoverySuccess: "Administrator access restored",
+      backToLogin: "Back to sign in",
+    },
+    validation: {
+      usernameRequired: "Enter a username",
+      usernameLength: "Username must be 1–64 characters",
+      passwordLength: "Password must be 8–128 characters",
+      passwordMismatch: "Passwords do not match",
+      tokenRequired: "Enter the setup token",
+    },
+  },
+  zh: {
+    username: "用户名",
+    password: "密码",
+    confirmPassword: "确认密码",
+    showPassword: "显示密码",
+    hidePassword: "隐藏密码",
+    login: {
+      title: "登录",
+      description: "登录以管理你的 FireSSL 实例。",
+      submit: "登录",
+      submitting: "登录中…",
+      invalid: "用户名或密码错误。",
+      rateLimited: "失败次数过多，请在 {seconds} 秒后重试。",
+      rateLimitedNoWait: "失败次数过多，请稍后再试。",
+      recover: "使用初始化令牌恢复访问",
+    },
+    setup: {
+      title: "欢迎使用 FireSSL",
+      description: "创建管理员账户以完成初始化。",
+      token: "初始化令牌",
+      tokenPlaceholder: "粘贴初始化令牌",
+      tokenHelp:
+        "当 FireSSL 在没有管理员账户的情况下启动时，会在服务端日志中打印一次性初始化令牌。请查看控制台输出或服务日志（journalctl -u firessl）。",
+      tokenInvalid: "初始化令牌无效，请从服务端日志中重新复制。",
+      alreadyInitialized: "管理员账户已存在，请直接登录。",
+      submit: "创建账户",
+      submitting: "创建中…",
+      success: "管理员账户已创建",
+      recoveryTitle: "恢复管理员访问",
+      recoveryDescription:
+        "已开启账户恢复。输入服务端日志中的初始化令牌，重新设置管理员用户名和密码。",
+      recoverySubmit: "恢复访问",
+      recoverySuccess: "管理员访问已恢复",
+      backToLogin: "返回登录",
+    },
+    validation: {
+      usernameRequired: "请输入用户名",
+      usernameLength: "用户名长度需为 1–64 个字符",
+      passwordLength: "密码长度需为 8–128 个字符",
+      passwordMismatch: "两次输入的密码不一致",
+      tokenRequired: "请输入初始化令牌",
+    },
+  },
+})
