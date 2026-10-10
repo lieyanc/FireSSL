@@ -1,0 +1,27 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8090
+  },
+  "auth": {
+    "sessionTtl": 604800
+  },
+  "pki": {
+    "publicUrl": "",
+    "defaultKeyAlgorithm": "ecdsa-p256",
+    "defaultValidityDays": 397,
+    "expiryWarningDays": 30
+  },
+  "logging": {
+    "level": "info"
+  },
+  "update": {
+    "enabled": false,
+    "channel": "stable",
+    "checkInterval": 3600,
+    "source": "github",
+    "proxyBaseUrl": "",
+    "repo": "lieyanc/FireSSL"
+  },
+  "dataDir": "./data"
+}
