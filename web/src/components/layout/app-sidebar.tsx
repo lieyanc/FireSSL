@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react"
 import { Link, useLocation } from "react-router"
 import { ShieldCheckIcon } from "lucide-react"
 
@@ -16,11 +17,26 @@ import {
   SidebarRail,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { isNavActive, NAV_MAIN, NAV_TOOLS } from "@/components/layout/nav"
+import {
+  isNavActive,
+  NAV_MAIN,
+  NAV_SECONDARY,
+  NAV_TOOLS,
+  type NavItem,
+} from "@/components/layout/nav"
+import { NavUser } from "@/components/layout/nav-user"
 import { useI18n } from "@/i18n"
-import { useOverview, useVersion } from "@/lib/queries"
+import { useOverview } from "@/lib/queries"
 
-function NavGroup({ label, items }: { label: string; items: typeof NAV_MAIN }) {
+function NavGroup({
+  label,
+  items,
+  className,
+}: {
+  label?: string
+  items: NavItem[]
+  className?: string
+}) {
   const { t } = useI18n()
   const { pathname } = useLocation()
   const { isMobile, setOpenMobile } = useSidebar()
@@ -29,64 +45,55 @@ function NavGroup({ label, items }: { label: string; items: typeof NAV_MAIN }) {
     (overview.data?.expiring ?? 0) + (overview.data?.expired ?? 0)
 
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel>{label}</SidebarGroupLabel>
+    <SidebarGroup className={className}>
+      {label && <SidebarGroupLabel>{label}</SidebarGroupLabel>}
       <SidebarGroupContent>
         <SidebarMenu>
-          {items.map((item) => {
-            const text = t(item.label)
-            return (
-              <SidebarMenuItem key={item.to}>
-                <SidebarMenuButton
-                  asChild
-                  isActive={isNavActive(pathname, item.to)}
-                  tooltip={text}
+          {items.map((item) => (
+            <SidebarMenuItem key={item.to}>
+              <SidebarMenuButton
+                asChild
+                isActive={isNavActive(pathname, item.to)}
+              >
+                <Link
+                  to={item.to}
+                  onClick={() => isMobile && setOpenMobile(false)}
                 >
-                  <Link
-                    to={item.to}
-                    onClick={() => isMobile && setOpenMobile(false)}
-                  >
-                    <item.icon />
-                    <span>{text}</span>
-                  </Link>
-                </SidebarMenuButton>
-                {item.to === "/certificates" && attention > 0 && (
-                  <SidebarMenuBadge className="text-warning">
-                    {attention}
-                  </SidebarMenuBadge>
-                )}
-              </SidebarMenuItem>
-            )
-          })}
+                  <item.icon />
+                  <span>{t(item.label)}</span>
+                </Link>
+              </SidebarMenuButton>
+              {item.to === "/certificates" && attention > 0 && (
+                <SidebarMenuBadge className="text-warning">
+                  {attention}
+                </SidebarMenuBadge>
+              )}
+            </SidebarMenuItem>
+          ))}
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>
   )
 }
 
-export function AppSidebar() {
+export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const { t } = useI18n()
   const { isMobile, setOpenMobile } = useSidebar()
-  const version = useVersion()
 
   return (
-    <Sidebar collapsible="icon">
+    <Sidebar collapsible="offcanvas" {...props}>
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild>
+            <SidebarMenuButton
+              asChild
+              className="data-[slot=sidebar-menu-button]:p-1.5!"
+            >
               <Link to="/" onClick={() => isMobile && setOpenMobile(false)}>
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-                  <ShieldCheckIcon />
-                </div>
-                <div className="grid flex-1 text-left leading-tight">
-                  <span className="truncate font-semibold">
-                    {t("common.appName")}
-                  </span>
-                  <span className="truncate text-xs text-muted-foreground">
-                    {t("common.tagline")}
-                  </span>
-                </div>
+                <ShieldCheckIcon className="size-5! text-primary" />
+                <span className="text-base font-semibold">
+                  {t("common.appName")}
+                </span>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -95,13 +102,10 @@ export function AppSidebar() {
       <SidebarContent>
         <NavGroup label={t("shell.nav.pki")} items={NAV_MAIN} />
         <NavGroup label={t("shell.nav.tools")} items={NAV_TOOLS} />
+        <NavGroup items={NAV_SECONDARY} className="mt-auto" />
       </SidebarContent>
       <SidebarFooter>
-        {version.data && (
-          <p className="truncate px-2 font-mono text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
-            {version.data.version}
-          </p>
-        )}
+        <NavUser />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

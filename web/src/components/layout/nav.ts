@@ -9,7 +9,7 @@ import {
 
 import type { MessageKey } from "@/i18n"
 
-type NavItem = {
+export type NavItem = {
   to: string
   label: MessageKey
   icon: LucideIcon
@@ -23,6 +23,10 @@ export const NAV_MAIN: NavItem[] = [
 
 export const NAV_TOOLS: NavItem[] = [
   { to: "/inspect", label: "shell.nav.inspect", icon: ScanSearchIcon },
+]
+
+/** Pinned to the bottom of the sidebar, above the account menu. */
+export const NAV_SECONDARY: NavItem[] = [
   { to: "/settings", label: "shell.nav.settings", icon: SettingsIcon },
 ]
 

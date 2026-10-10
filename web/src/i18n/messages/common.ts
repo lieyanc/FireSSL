@@ -156,7 +156,7 @@ export const shell = defineMessages({
     },
     user: {
       menu: "Account menu",
-      signedInAs: "Signed in as",
+      administrator: "Administrator",
       changePassword: "Change password",
       logout: "Sign out",
       loggedOut: "Signed out",
@@ -190,7 +190,7 @@ export const shell = defineMessages({
     },
     user: {
       menu: "账户菜单",
-      signedInAs: "当前登录",
+      administrator: "管理员",
       changePassword: "修改密码",
       logout: "退出登录",
       loggedOut: "已退出登录",

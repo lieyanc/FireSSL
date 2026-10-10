@@ -1,16 +1,11 @@
-import { Link, useMatches, useNavigate, useParams } from "react-router"
-import { useQueryClient } from "@tanstack/react-query"
+import { Link, useMatches, useParams } from "react-router"
 import {
   CheckIcon,
-  KeyRoundIcon,
   LanguagesIcon,
-  LogOutIcon,
   MonitorIcon,
   MoonIcon,
   SunIcon,
-  UserIcon,
 } from "lucide-react"
-import { toast } from "sonner"
 
 import { useTheme, type Theme } from "@/components/theme-provider"
 import {
@@ -30,7 +25,6 @@ import {
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Separator } from "@/components/ui/separator"
@@ -41,10 +35,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { LANG_LABELS, LANGS, useI18n, type Lang, type MessageKey } from "@/i18n"
-import { api } from "@/lib/api"
-import { toastError } from "@/lib/errors"
-import { useAuthState, useRecord } from "@/lib/queries"
-import { signedOut } from "@/lib/session"
+import { useRecord } from "@/lib/queries"
 import type { RecordKind } from "@/lib/types"
 
 export type RouteHandle = {
@@ -177,79 +168,19 @@ function ThemeToggle() {
   )
 }
 
-function UserMenu() {
-  const { t } = useI18n()
-  const auth = useAuthState()
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const username = auth.data?.username ?? ""
-
-  const logout = async () => {
-    try {
-      await api.auth.logout()
-    } catch (error) {
-      toastError(error, t)
-      return
-    }
-    await queryClient.cancelQueries()
-    signedOut()
-    toast.success(t("shell.user.loggedOut"))
-    navigate("/login", { replace: true })
-  }
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" aria-label={t("shell.user.menu")}>
-          <UserIcon data-icon="inline-start" />
-          <span className="hidden max-w-32 truncate md:inline">{username}</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-48">
-        <DropdownMenuLabel className="flex flex-col">
-          <span className="text-xs font-normal text-muted-foreground">
-            {t("shell.user.signedInAs")}
-          </span>
-          <span className="truncate">{username}</span>
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup>
-          <DropdownMenuItem asChild>
-            <Link to="/settings/account">
-              <KeyRoundIcon />
-              {t("shell.user.changePassword")}
-            </Link>
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup>
-          <DropdownMenuItem
-            variant="destructive"
-            onSelect={() => void logout()}
-          >
-            <LogOutIcon />
-            {t("shell.user.logout")}
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
 export function SiteHeader() {
   const { t } = useI18n()
   return (
-    <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:px-4">
+    <header className="sticky top-0 z-10 flex h-(--header-height) shrink-0 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 md:rounded-t-xl lg:px-6">
       <SidebarTrigger className="-ml-1" aria-label={t("shell.toggleSidebar")} />
       <Separator
         orientation="vertical"
-        className="mr-1 data-[orientation=vertical]:h-4"
+        className="mx-1 data-vertical:h-4 data-vertical:self-center"
       />
       <PageBreadcrumb />
       <div className="ml-auto flex items-center gap-1">
         <LanguageSwitcher />
         <ThemeToggle />
-        <UserMenu />
       </div>
     </header>
   )

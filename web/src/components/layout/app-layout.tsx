@@ -1,4 +1,4 @@
-import { Suspense } from "react"
+import { Suspense, type CSSProperties } from "react"
 import { Outlet } from "react-router"
 
 import { PageSkeleton } from "@/components/common/query-state"
@@ -14,8 +14,16 @@ function readSidebarCookie() {
 /** Authenticated app chrome: sidebar and header. */
 export function AppLayout() {
   return (
-    <SidebarProvider defaultOpen={readSidebarCookie()}>
-      <AppSidebar />
+    <SidebarProvider
+      defaultOpen={readSidebarCookie()}
+      style={
+        {
+          "--sidebar-width": "calc(var(--spacing) * 64)",
+          "--header-height": "calc(var(--spacing) * 12)",
+        } as CSSProperties
+      }
+    >
+      <AppSidebar variant="inset" />
       <SidebarInset className="min-w-0">
         <SiteHeader />
         <Suspense fallback={<PageSkeleton />}>
