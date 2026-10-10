@@ -12,9 +12,10 @@ A self-hosted private certificate authority with a built-in web UI. One static G
 - **Lifecycle**: renew with a fresh or the same key (optionally revoking the old certificate), revoke with RFC 5280 reasons, expiry warnings on the dashboard.
 - **Revocation lists**: each CA signs its CRL on demand. With a public URL configured, new certificates carry CRL distribution point and CA issuer URLs, served without authentication at `/crl/<id>.crl` and `/ca/<id>.crt`.
 - **Exports**: PEM certificate, full chain, CA chain, DER, PKCS#8 key, password-protected PKCS#12 (modern AES or legacy 3DES) and a ZIP bundle with everything.
+- **Multi-tenancy**: users, tenants and per-tenant roles. Root CAs stay with the platform; the administrator gives each tenant a sub-CA, and the tenant issues its own certificates with it, isolated from other tenants.
 - **Inspector**: decode pasted certificates, CSRs, keys and CRLs, and check that a key matches a certificate.
 - **Web UI** (React + shadcn/ui, embedded in the binary): English and Chinese; light/dark theme; per-OS instructions to trust a root CA.
-- **Security**: private keys are encrypted at rest with AES-256-GCM under a separate master key; bcrypt admin password, signed HttpOnly session cookies, login throttling and CSRF checks.
+- **Security**: private keys are encrypted at rest with AES-256-GCM under a separate master key; bcrypt passwords, signed HttpOnly session cookies, login throttling and CSRF checks.
 - **Self-update** from GitHub Releases (opt-in), verified against `SHA256SUMS`.
 
 ## Quick start
@@ -35,11 +36,33 @@ level=WARN msg="admin account not set up yet: open the web UI and enter this set
 
 Enter it in the UI with a username and password. Then create a root CA, install it as trusted on your devices (the CA's *Trust & distribution* tab has the commands), and issue certificates.
 
-Forgot the password? Stop the service, run `firessl -c <config> -reset-auth`, start it again and enter the newly logged setup token to set new credentials. CAs and certificates are kept.
+Locked out? Stop the service, run `firessl -c <config> -reset-auth`, start it again and enter the newly logged setup token with a username and password. That account (new or existing) becomes an enabled system administrator with the new password. CAs, certificates and other users are kept.
 
 The UI listens on `127.0.0.1` by default. To reach it remotely, put it behind a TLS reverse proxy (recommended) or set `server.host` to `0.0.0.0`.
 
 Flags: `-c <path>` config file, `-v` print version, `-reset-auth` enable one-time administrator recovery on the next start.
+
+## Tenants and roles
+
+The first account is a **system administrator**. Administrators manage root CAs, imports, tenants, users and system settings, and act as owner in every tenant. More accounts are created under *Users*.
+
+A **tenant** groups people and the CAs they work with. Every CA and certificate belongs either to the platform or to one tenant:
+
+- Root CAs always belong to the platform.
+- An administrator creates a sub-CA under a root and assigns it to a tenant (or reassigns an existing sub-CA). Everything that sub-CA issues belongs to the same tenant.
+- A tenant sees its own records and, read-only, the platform CAs above them, so it can download chains and CRLs but never their private keys.
+
+Each member has one role per tenant:
+
+| Role     | Can |
+| -------- | --- |
+| Viewer   | Browse the tenant's CAs and certificates, download certificates, chains and CRLs |
+| Operator | Also issue, sign CSRs, renew, revoke, rename and delete certificates, and export their private keys |
+| Owner    | Also create, revoke and delete the tenant's sub-CAs and manage its members |
+
+Users pick the tenant they work in with the workspace switcher at the top of the sidebar. API clients choose it with the `X-FireSSL-Tenant: <tenant id>` header; administrators who leave it out work across the whole platform.
+
+Upgrading from a single-administrator release moves the existing account into the user directory (`data/iam.json`) as a system administrator. Existing CAs and certificates stay with the platform until you assign them to tenants.
 
 ### systemd
 
