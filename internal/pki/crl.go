@@ -34,17 +34,17 @@ type crlCache struct {
 
 // Revoke marks a certificate or sub-CA as revoked; it appears on its
 // issuer's CRL from then on.
-func (s *Store) Revoke(id, kind, reason string) (View, error) {
+func (s *Store) Revoke(sc Scope, id, kind, reason string) (View, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e, err := s.get(id, kind)
+	e, err := s.find(sc, id, kind, true)
 	if err != nil {
 		return View{}, err
 	}
 	if err := s.revokeLocked(e.ID, reason); err != nil {
 		return View{}, err
 	}
-	return s.viewLocked(e, time.Now(), s.options().ExpiryWarn, true), nil
+	return s.viewLocked(s.ctxLocked(sc), e, true), nil
 }
 
 func (s *Store) revokeLocked(id, reason string) error {
@@ -56,10 +56,10 @@ func (s *Store) revokeLocked(id, reason string) error {
 		return &FieldError{Field: "reason", Msg: "unknown revocation reason"}
 	}
 	if e.RevokedAt != nil {
-		return &ConflictError{e.Name + " is already revoked"}
+		return &ConflictError{Msg: e.Name + " is already revoked"}
 	}
 	if e.Kind == KindCA && e.IssuerID == "" {
-		return &ConflictError{"a root CA cannot be revoked; delete it or stop trusting it instead"}
+		return &ConflictError{Msg: "a root CA cannot be revoked; delete it or stop trusting it instead"}
 	}
 	t := now()
 	err := s.commitLocked(func() { e.RevokedAt, e.RevocationReason = &t, reason })
@@ -80,7 +80,7 @@ func (s *Store) CRL(caID string) ([]byte, error) {
 		return c.der, nil
 	}
 	if ca.cert.KeyUsage != 0 && ca.cert.KeyUsage&x509.KeyUsageCRLSign == 0 {
-		return nil, &ConflictError{ca.Name + " is not allowed to sign CRLs (no cRLSign usage)"}
+		return nil, &ConflictError{Msg: ca.Name + " is not allowed to sign CRLs (no cRLSign usage)"}
 	}
 	key, err := s.key(ca)
 	if err != nil {

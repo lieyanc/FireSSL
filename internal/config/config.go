@@ -35,12 +35,14 @@ type ServerConfig struct {
 }
 
 type AuthConfig struct {
+	// Username and PasswordHash held the single administrator of earlier
+	// releases; they are moved into the user directory on start.
 	Username      string `json:"username,omitempty"`
 	PasswordHash  string `json:"passwordHash,omitempty"`
 	SessionSecret string `json:"sessionSecret,omitempty"`
 	SessionTTL    int    `json:"sessionTtl"` // seconds
-	// Recovery lets the setup token reset the administrator (set by
-	// -reset-auth, cleared once used).
+	// Recovery lets the setup token create or reset a system administrator
+	// (set by -reset-auth, cleared once used).
 	Recovery bool `json:"recovery,omitempty"`
 }
 
@@ -74,6 +76,16 @@ type FieldError struct {
 }
 
 func (e *FieldError) Error() string { return e.Field + ": " + e.Msg }
+
+// ConflictError means the request clashes with the current state.
+type ConflictError struct{ Msg string }
+
+func (e *ConflictError) Error() string { return e.Msg }
+
+// ForbiddenError means the caller may see the target but not change it.
+type ForbiddenError struct{ Msg string }
+
+func (e *ForbiddenError) Error() string { return e.Msg }
 
 // Default returns the embedded template.
 func Default() *Config {

@@ -31,9 +31,11 @@ var (
 type FieldError = config.FieldError
 
 // ConflictError means the request clashes with the current state.
-type ConflictError struct{ Msg string }
+type ConflictError = config.ConflictError
 
-func (e *ConflictError) Error() string { return e.Msg }
+// ForbiddenError means the record is visible to the caller's tenant but
+// managed by the platform administrator.
+type ForbiddenError = config.ForbiddenError
 
 const (
 	KindCA   = "ca"
@@ -52,6 +54,10 @@ type Record struct {
 	Kind     string `json:"kind"`
 	Name     string `json:"name"`
 	IssuerID string `json:"issuerId,omitempty"` // empty for self-signed or unknown issuers
+	// TenantID is the tenant that owns the record; empty for the platform.
+	// Root CAs always belong to the platform, everything a CA issues to the
+	// CA's tenant.
+	TenantID string `json:"tenantId,omitempty"`
 	// Profile is root or intermediate for CAs, and server, client or
 	// server-client for leaf certificates.
 	Profile          string     `json:"profile"`
@@ -173,17 +179,82 @@ func (s *Store) getLocked(id string) *entry {
 func (s *Store) get(id, kind string) (*entry, error) {
 	e := s.getLocked(id)
 	if e == nil || (kind != "" && e.Kind != kind) {
-		if kind == KindCA {
-			return nil, fmt.Errorf("certificate authority %s %w", id, ErrNotFound)
-		}
-		return nil, fmt.Errorf("certificate %s %w", id, ErrNotFound)
+		return nil, notFound(id, kind)
 	}
 	return e, nil
 }
 
+func notFound(id, kind string) error {
+	if kind == KindCA {
+		return fmt.Errorf("certificate authority %s %w", id, ErrNotFound)
+	}
+	return fmt.Errorf("certificate %s %w", id, ErrNotFound)
+}
+
+// Scope is the part of the inventory a caller works in: the records of one
+// tenant, plus (read-only) the CAs above them; or, with Tenant empty, the
+// whole platform.
+type Scope struct{ Tenant string }
+
+// Platform sees and manages every record.
+var Platform = Scope{}
+
+func (sc Scope) owns(e *entry) bool { return sc.Tenant == "" || e.TenantID == sc.Tenant }
+
+// visibleLocked returns the ids sc may read, or nil when it sees everything.
+func (s *Store) visibleLocked(sc Scope) map[string]bool {
+	if sc.Tenant == "" {
+		return nil
+	}
+	vis := map[string]bool{}
+	for _, e := range s.entries {
+		if e.TenantID == sc.Tenant {
+			vis[e.ID] = true
+			for _, p := range s.chainLocked(e) {
+				vis[p.ID] = true
+			}
+		}
+	}
+	return vis
+}
+
+func canSee(vis map[string]bool, id string) bool { return vis == nil || vis[id] }
+
+// find returns a record sc may read; write also requires sc to own it.
+// Records outside the scope are reported as missing.
+func (s *Store) find(sc Scope, id, kind string, write bool) (*entry, error) {
+	e, err := s.get(id, kind)
+	if err != nil {
+		return nil, err
+	}
+	if sc.owns(e) {
+		return e, nil
+	}
+	if !canSee(s.visibleLocked(sc), e.ID) {
+		return nil, notFound(id, kind)
+	}
+	if write {
+		return nil, &ForbiddenError{Msg: e.Name + " is managed by the platform administrator"}
+	}
+	return e, nil
+}
+
+// TenantRecords counts the records a tenant owns.
+func (s *Store) TenantRecords(tenant string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, e := range s.entries {
+		if e.TenantID == tenant {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *Store) key(e *entry) (crypto.Signer, error) {
 	if e.SealedKey == "" {
-		return nil, &ConflictError{"no private key is stored for " + e.Name}
+		return nil, &ConflictError{Msg: "no private key is stored for " + e.Name}
 	}
 	plain, err := s.sealer.open(e.SealedKey, e.ID)
 	if err != nil {
@@ -276,11 +347,15 @@ type Details struct {
 
 // View is a stored record as the API presents it.
 type View struct {
-	ID               string     `json:"id"`
-	Kind             string     `json:"kind"`
-	Name             string     `json:"name"`
-	IssuerID         string     `json:"issuerId,omitempty"`
-	IssuerName       string     `json:"issuerName,omitempty"`
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	IssuerID   string `json:"issuerId,omitempty"`
+	IssuerName string `json:"issuerName,omitempty"`
+	TenantID   string `json:"tenantId,omitempty"`
+	// ReadOnly marks a CA shown to a tenant only because its sub-CAs chain
+	// up to it.
+	ReadOnly         bool       `json:"readOnly,omitempty"`
 	Profile          string     `json:"profile"`
 	Source           string     `json:"source"`
 	Status           string     `json:"status"`
@@ -323,9 +398,25 @@ func status(e *entry, now time.Time, warn time.Duration) string {
 	return StatusValid
 }
 
-func (s *Store) viewLocked(e *entry, now time.Time, warn time.Duration, full bool) View {
+// viewCtx carries what rendering views for one request needs.
+type viewCtx struct {
+	sc   Scope
+	vis  map[string]bool
+	now  time.Time
+	warn time.Duration
+}
+
+func (s *Store) ctxLocked(sc Scope) viewCtx {
+	return viewCtx{sc: sc, vis: s.visibleLocked(sc), now: time.Now(), warn: s.options().ExpiryWarn}
+}
+
+// viewLocked renders e as seen from c.sc: counts and links only cover
+// records the scope can see.
+func (s *Store) viewLocked(c viewCtx, e *entry, full bool) View {
+	now, warn := c.now, c.warn
 	v := View{
-		ID: e.ID, Kind: e.Kind, Name: e.Name, IssuerID: e.IssuerID, Profile: e.Profile,
+		ID: e.ID, Kind: e.Kind, Name: e.Name, IssuerID: e.IssuerID, TenantID: e.TenantID,
+		ReadOnly: !c.sc.owns(e), Profile: e.Profile,
 		Source: e.Source, Status: status(e, now, warn), HasKey: e.SealedKey != "",
 		RevokedAt: e.RevokedAt, RevocationReason: e.RevocationReason, RenewedFrom: e.RenewedFrom,
 		CreatedAt: e.CreatedAt, Details: describe(e.cert),
@@ -338,6 +429,9 @@ func (s *Store) viewLocked(e *entry, now time.Time, warn time.Duration, full boo
 		v.Depth = len(chain)
 	}
 	for _, o := range s.entries {
+		if !canSee(c.vis, o.ID) {
+			continue
+		}
 		if o.RenewedFrom == e.ID {
 			v.RenewedBy = o.ID
 		}
@@ -367,23 +461,23 @@ type Filter struct {
 
 // List returns matching records; CAs come in hierarchy order (each CA
 // followed by its sub-CAs), certificates newest first.
-func (s *Store) List(f Filter) []View {
+func (s *Store) List(sc Scope, f Filter) []View {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	now, warn := time.Now(), s.options().ExpiryWarn
+	c := s.ctxLocked(sc)
 	out := []View{}
 	if f.Kind == KindCA {
 		for _, e := range s.caTreeLocked() {
-			if f.IssuerID == "" || e.IssuerID == f.IssuerID {
-				out = append(out, s.viewLocked(e, now, warn, false))
+			if canSee(c.vis, e.ID) && (f.IssuerID == "" || e.IssuerID == f.IssuerID) {
+				out = append(out, s.viewLocked(c, e, false))
 			}
 		}
 		return out
 	}
 	for i := len(s.entries) - 1; i >= 0; i-- {
 		e := s.entries[i]
-		if (f.Kind == "" || e.Kind == f.Kind) && (f.IssuerID == "" || e.IssuerID == f.IssuerID) {
-			out = append(out, s.viewLocked(e, now, warn, false))
+		if canSee(c.vis, e.ID) && (f.Kind == "" || e.Kind == f.Kind) && (f.IssuerID == "" || e.IssuerID == f.IssuerID) {
+			out = append(out, s.viewLocked(c, e, false))
 		}
 	}
 	return out
@@ -416,46 +510,46 @@ func (s *Store) caTreeLocked() []*entry {
 }
 
 // Get returns one record with its PEM and chain.
-func (s *Store) Get(id, kind string) (View, error) {
+func (s *Store) Get(sc Scope, id, kind string) (View, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	e, err := s.get(id, kind)
+	e, err := s.find(sc, id, kind, false)
 	if err != nil {
 		return View{}, err
 	}
-	return s.viewLocked(e, time.Now(), s.options().ExpiryWarn, true), nil
+	return s.viewLocked(s.ctxLocked(sc), e, true), nil
 }
 
 // Rename changes the display name.
-func (s *Store) Rename(id, kind, name string) (View, error) {
+func (s *Store) Rename(sc Scope, id, kind, name string) (View, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || len(name) > 128 {
 		return View{}, &FieldError{Field: "name", Msg: "name must be 1-128 characters"}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e, err := s.get(id, kind)
+	e, err := s.find(sc, id, kind, true)
 	if err != nil {
 		return View{}, err
 	}
 	if err := s.commitLocked(func() { e.Name = name }); err != nil {
 		return View{}, err
 	}
-	return s.viewLocked(e, time.Now(), s.options().ExpiryWarn, true), nil
+	return s.viewLocked(s.ctxLocked(sc), e, true), nil
 }
 
 // Delete removes a record. A CA must not have issued anything still stored.
-func (s *Store) Delete(id, kind string) error {
+func (s *Store) Delete(sc Scope, id, kind string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	e, err := s.get(id, kind)
+	e, err := s.find(sc, id, kind, true)
 	if err != nil {
 		return err
 	}
 	if e.Kind == KindCA {
 		for _, o := range s.entries {
 			if o.IssuerID == id && o.ID != id {
-				return &ConflictError{"delete the certificates and sub-CAs issued by " + e.Name + " first"}
+				return &ConflictError{Msg: "delete the certificates and sub-CAs issued by " + e.Name + " first"}
 			}
 		}
 	}
@@ -479,13 +573,18 @@ type Overview struct {
 	WarningDays  int    `json:"warningDays"`
 }
 
-func (s *Store) Overview() Overview {
+// Overview counts only the records sc owns.
+func (s *Store) Overview(sc Scope) Overview {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	now, warn := time.Now(), s.options().ExpiryWarn
+	c := s.ctxLocked(sc)
+	now, warn := c.now, c.warn
 	o := Overview{Attention: []View{}, Recent: []View{}, WarningDays: int(warn / (24 * time.Hour))}
 	for i := len(s.entries) - 1; i >= 0; i-- {
 		e := s.entries[i]
+		if !sc.owns(e) {
+			continue
+		}
 		st := status(e, now, warn)
 		if e.Kind == KindCA {
 			o.Authorities++
@@ -502,13 +601,13 @@ func (s *Store) Overview() Overview {
 				o.Revoked++
 			}
 			if len(o.Recent) < 6 {
-				o.Recent = append(o.Recent, s.viewLocked(e, now, warn, false))
+				o.Recent = append(o.Recent, s.viewLocked(c, e, false))
 			}
 		}
 		// Superseded certificates no longer need attention.
 		renewed := slices.ContainsFunc(s.entries, func(r *entry) bool { return r.RenewedFrom == e.ID })
 		if !renewed && (st == StatusExpiring || (st == StatusExpired && now.Sub(e.cert.NotAfter) < 30*24*time.Hour)) {
-			o.Attention = append(o.Attention, s.viewLocked(e, now, warn, false))
+			o.Attention = append(o.Attention, s.viewLocked(c, e, false))
 		}
 	}
 	slices.SortFunc(o.Attention, func(a, b View) int { return a.Details.NotAfter.Compare(b.Details.NotAfter) })
@@ -617,4 +716,36 @@ func extKeyUsageNames(us []x509.ExtKeyUsage) []string {
 		}
 	}
 	return out
+}
+
+// AssignTenant hands a sub-CA and everything below it to a tenant, or back
+// to the platform when tenant is empty.
+func (s *Store) AssignTenant(id, tenant string) (View, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, err := s.get(id, KindCA)
+	if err != nil {
+		return View{}, err
+	}
+	if e.Profile == ProfileRoot || isSelfSigned(e.cert) {
+		return View{}, &ConflictError{Msg: "root CAs stay with the platform; assign one of their sub-CAs instead"}
+	}
+	if p := s.getLocked(e.IssuerID); p != nil && p.TenantID != "" && p.TenantID != tenant {
+		return View{}, &ConflictError{Msg: e.Name + " is issued by " + p.Name + ", which belongs to a tenant; reassign " + p.Name + " instead"}
+	}
+	var subtree []*entry
+	for _, o := range s.entries {
+		if o == e || slices.ContainsFunc(s.chainLocked(o), func(p *entry) bool { return p == e }) {
+			subtree = append(subtree, o)
+		}
+	}
+	err = s.commitLocked(func() {
+		for _, o := range subtree {
+			o.TenantID = tenant
+		}
+	})
+	if err != nil {
+		return View{}, err
+	}
+	return s.viewLocked(s.ctxLocked(Platform), e, true), nil
 }

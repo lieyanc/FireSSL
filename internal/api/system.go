@@ -48,6 +48,11 @@ func (s *Server) settings() Settings {
 	}
 }
 
+// pkiDefaults exposes the issuance settings every user's forms start from.
+func (s *Server) pkiDefaults(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.Store.Get().PKI)
+}
+
 func (s *Server) getSettings(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.settings())
 }
@@ -87,7 +92,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if s.SetLogLevel != nil {
 		s.SetLogLevel(c.Logging.Level)
 	}
-	slog.Info("settings updated")
+	slog.Info("settings updated", "user", actor(r))
 	writeJSON(w, http.StatusOK, s.settings())
 }
 

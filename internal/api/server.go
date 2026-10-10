@@ -17,6 +17,7 @@ import (
 
 	"github.com/lieyanc/FireSSL/internal/auth"
 	"github.com/lieyanc/FireSSL/internal/config"
+	"github.com/lieyanc/FireSSL/internal/iam"
 	"github.com/lieyanc/FireSSL/internal/pki"
 	"github.com/lieyanc/FireSSL/internal/updater"
 )
@@ -24,6 +25,7 @@ import (
 type Deps struct {
 	Store   *config.Store
 	PKI     *pki.Store
+	Users   *iam.Store
 	Auth    *auth.Service
 	Updater *updater.Updater
 	Started time.Time
@@ -87,27 +89,43 @@ func (s *Server) routes() http.Handler {
 	h("GET /ca/{file}", s.publicCACert)
 
 	// Authenticated (enforced by withAuth for everything else under /api).
+	// Inventory routes work in the tenant named by the TenantHeader.
 	h("POST /api/auth/logout", s.logout)
 	h("POST /api/auth/password", s.changePassword)
 
 	h("GET /api/overview", s.overview)
+	h("GET /api/pki/defaults", s.pkiDefaults)
 	s.recordRoutes(mux, "/api/authorities", pki.KindCA)
 	s.recordRoutes(mux, "/api/certificates", pki.KindLeaf)
 	h("POST /api/authorities", s.createCA)
-	h("POST /api/authorities/import", s.importCA)
+	h("POST /api/authorities/import", adminOnly(s.importCA))
+	h("POST /api/authorities/{id}/tenant", adminOnly(s.assignTenant))
 	h("POST /api/certificates", s.issue)
 	h("POST /api/certificates/csr", s.signCSR)
 	h("POST /api/certificates/{id}/renew", s.renew)
 	h("POST /api/inspect", s.inspect)
 
-	h("GET /api/settings", s.getSettings)
-	h("PUT /api/settings", s.putSettings)
-	h("POST /api/system/restart", s.restart)
+	h("GET /api/tenants", s.listTenants)
+	h("POST /api/tenants", adminOnly(s.createTenant))
+	h("GET /api/tenants/{id}", s.getTenant)
+	h("PATCH /api/tenants/{id}", adminOnly(s.updateTenant))
+	h("DELETE /api/tenants/{id}", adminOnly(s.deleteTenant))
+	h("PUT /api/tenants/{id}/members", s.setMember)
+	h("DELETE /api/tenants/{id}/members/{userId}", s.removeMember)
 
-	h("GET /api/update/status", s.updateStatus)
-	h("POST /api/update/check", s.updateCheck)
-	h("POST /api/update/apply", s.updateApply)
-	h("POST /api/update/dismiss", s.updateDismiss)
+	h("GET /api/users", adminOnly(s.listUsers))
+	h("POST /api/users", adminOnly(s.createUser))
+	h("PATCH /api/users/{id}", adminOnly(s.updateUser))
+	h("DELETE /api/users/{id}", adminOnly(s.deleteUser))
+
+	h("GET /api/settings", adminOnly(s.getSettings))
+	h("PUT /api/settings", adminOnly(s.putSettings))
+	h("POST /api/system/restart", adminOnly(s.restart))
+
+	h("GET /api/update/status", adminOnly(s.updateStatus))
+	h("POST /api/update/check", adminOnly(s.updateCheck))
+	h("POST /api/update/apply", adminOnly(s.updateApply))
+	h("POST /api/update/dismiss", adminOnly(s.updateDismiss))
 
 	h("/api/", func(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "not_found", "endpoint "+r.Method+" "+r.URL.Path+" not found")
@@ -212,7 +230,8 @@ func fail(w http.ResponseWriter, code int, errCode, msg string) {
 func failErr(w http.ResponseWriter, err error) {
 	var (
 		fe *config.FieldError
-		ce *pki.ConflictError
+		ce *config.ConflictError
+		fb *config.ForbiddenError
 		rl *auth.RateLimitError
 	)
 	switch {
@@ -220,7 +239,9 @@ func failErr(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusBadRequest, apiError{"validation", fe.Msg, fe.Field})
 	case errors.As(err, &ce):
 		fail(w, http.StatusConflict, "conflict", ce.Msg)
-	case errors.Is(err, pki.ErrNotFound):
+	case errors.As(err, &fb):
+		fail(w, http.StatusForbidden, "forbidden", fb.Msg)
+	case errors.Is(err, pki.ErrNotFound), errors.Is(err, iam.ErrNotFound):
 		fail(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.As(err, &rl):
 		w.Header().Set("Retry-After", strconv.Itoa(int(rl.RetryAfter.Seconds())+1))

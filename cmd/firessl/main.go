@@ -16,6 +16,7 @@ import (
 	"github.com/lieyanc/FireSSL/internal/api"
 	"github.com/lieyanc/FireSSL/internal/auth"
 	"github.com/lieyanc/FireSSL/internal/config"
+	"github.com/lieyanc/FireSSL/internal/iam"
 	"github.com/lieyanc/FireSSL/internal/pki"
 	"github.com/lieyanc/FireSSL/internal/updater"
 	"github.com/lieyanc/FireSSL/internal/version"
@@ -34,7 +35,7 @@ func setLogLevel(level string) {
 func main() {
 	cfgPath := flag.String("c", "config.json", "path to config file (created or completed from the default template)")
 	showVersion := flag.Bool("v", false, "print version and exit")
-	resetAuth := flag.Bool("reset-auth", false, "enable account recovery, then exit; the next start prints a setup token that resets the administrator")
+	resetAuth := flag.Bool("reset-auth", false, "enable account recovery, then exit; the next start prints a setup token that creates or resets a system administrator")
 	flag.Parse()
 	if *showVersion {
 		fmt.Printf("FireSSL %s (commit %s, built %s)\n", version.Version, version.Commit, version.BuildTime)
@@ -54,7 +55,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "reset failed:", err)
 			os.Exit(1)
 		}
-		fmt.Println("Account recovery enabled. Restart FireSSL, open the web UI and enter the setup token it logs to reset the administrator.")
+		fmt.Println("Account recovery enabled. Restart FireSSL, open the web UI and enter the setup token it logs to create or reset a system administrator.")
 		return
 	}
 	cfg := store.Get()
@@ -79,11 +80,20 @@ func main() {
 		slog.Error("failed to open the certificate database", "dataDir", store.DataDir(), "err", err)
 		os.Exit(1)
 	}
+	users, err := iam.Open(store.DataDir())
+	if err != nil {
+		slog.Error("failed to open the user directory", "dataDir", store.DataDir(), "err", err)
+		os.Exit(1)
+	}
+	authSvc, err := auth.New(store, users)
+	if err != nil {
+		slog.Error("failed to set up authentication", "err", err)
+		os.Exit(1)
+	}
 	slog.Info("configuration loaded", "version", version.Version, "configPath", *cfgPath, "dataDir", store.DataDir())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	authSvc := auth.New(store)
 
 	var srv *api.Server
 	var once sync.Once
@@ -111,7 +121,7 @@ func main() {
 	upd.StartBackground(ctx)
 
 	srv, err = api.Start(api.Deps{
-		Store: store, PKI: pkiStore, Auth: authSvc, Updater: upd, Started: start, Web: web.FS(),
+		Store: store, PKI: pkiStore, Users: users, Auth: authSvc, Updater: upd, Started: start, Web: web.FS(),
 		SetLogLevel: setLogLevel,
 		Restart: func() error {
 			err := updater.Restart(beforeExec)
@@ -128,7 +138,7 @@ func main() {
 	if tok := authSvc.SetupToken(); tok != "" {
 		url := "http://" + net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port))
 		if cfg.Auth.Recovery {
-			slog.Warn("account recovery enabled: open the web UI and enter this setup token to reset the administrator", "url", url, "setupToken", tok)
+			slog.Warn("account recovery enabled: open the web UI and enter this setup token to create or reset a system administrator", "url", url, "setupToken", tok)
 		} else {
 			slog.Warn("admin account not set up yet: open the web UI and enter this setup token", "url", url, "setupToken", tok)
 		}

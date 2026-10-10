@@ -46,6 +46,9 @@ type CARequest struct {
 	// PathLen limits how many sub-CA levels may follow; nil means unlimited
 	// (or one less than the issuer's limit).
 	PathLen *int `json:"pathLen"`
+	// TenantID assigns a sub-CA of a platform CA to a tenant. Sub-CAs of a
+	// tenant's CA always belong to that tenant.
+	TenantID string `json:"tenantId"`
 }
 
 // CertRequest issues a leaf certificate with a newly generated key.
@@ -86,7 +89,14 @@ type RenewRequest struct {
 }
 
 // CreateCA generates a key and a self-signed root or a sub-CA certificate.
-func (s *Store) CreateCA(req CARequest) (View, error) {
+// Root CAs belong to the platform.
+func (s *Store) CreateCA(sc Scope, req CARequest) (View, error) {
+	if req.IssuerID == "" && sc.Tenant != "" {
+		return View{}, &ForbiddenError{Msg: "only the platform administrator can create root CAs"}
+	}
+	if req.IssuerID == "" && req.TenantID != "" {
+		return View{}, &FieldError{Field: "tenantId", Msg: "root CAs belong to the platform; assign one of their sub-CAs to the tenant instead"}
+	}
 	if err := normalizeSubject(&req.Subject, true); err != nil {
 		return View{}, err
 	}
@@ -128,15 +138,22 @@ func (s *Store) CreateCA(req CARequest) (View, error) {
 		tmpl.MaxPathLen, tmpl.MaxPathLenZero = *req.PathLen, *req.PathLen == 0
 	}
 
-	profile := ProfileRoot
+	profile, tenant := ProfileRoot, ""
 	parent, signer := tmpl, crypto.Signer(key)
 	if req.IssuerID != "" {
-		issuer, issuerKey, err := s.issuerLocked(req.IssuerID)
+		issuer, issuerKey, err := s.issuerLocked(sc, req.IssuerID)
 		if err != nil {
 			return View{}, err
 		}
+		tenant = req.TenantID
+		if issuer.TenantID != "" {
+			if tenant != "" && tenant != issuer.TenantID {
+				return View{}, &FieldError{Field: "tenantId", Msg: "a sub-CA belongs to the tenant of its issuer"}
+			}
+			tenant = issuer.TenantID
+		}
 		if limit := issuer.cert.MaxPathLen; issuer.cert.MaxPathLenZero || limit == 0 {
-			return View{}, &ConflictError{issuer.Name + " has a path length of 0 and cannot issue sub-CAs"}
+			return View{}, &ConflictError{Msg: issuer.Name + " has a path length of 0 and cannot issue sub-CAs"}
 		} else if limit > 0 {
 			if req.PathLen == nil {
 				tmpl.MaxPathLen, tmpl.MaxPathLenZero = limit-1, limit-1 == 0
@@ -148,13 +165,17 @@ func (s *Store) CreateCA(req CARequest) (View, error) {
 		addIssuerURLs(tmpl, opts.PublicBase, issuer.ID)
 		profile, parent, signer = ProfileIntermediate, issuer.cert, issuerKey
 	}
-	return s.storeLocked(tmpl, parent, signer, key, &Record{
-		Kind: KindCA, Name: name, IssuerID: req.IssuerID, Profile: profile, Source: SourceGenerated,
+	e, err := s.storeLocked(tmpl, parent, signer, key, &Record{
+		Kind: KindCA, Name: name, IssuerID: req.IssuerID, TenantID: tenant, Profile: profile, Source: SourceGenerated,
 	})
+	if err != nil {
+		return View{}, err
+	}
+	return s.viewLocked(s.ctxLocked(sc), e, true), nil
 }
 
 // Issue generates a key and a leaf certificate signed by a CA.
-func (s *Store) Issue(req CertRequest) (View, error) {
+func (s *Store) Issue(sc Scope, req CertRequest) (View, error) {
 	opts := s.options()
 	if req.KeyAlgorithm == "" {
 		req.KeyAlgorithm = opts.DefaultAlg
@@ -175,13 +196,13 @@ func (s *Store) Issue(req CertRequest) (View, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.issueLocked(req.IssuerID, req.Profile, toName(req.Subject), req.SANs, req.ValidityDays, key.Public(), key, &Record{
+	return s.issueLocked(sc, req.IssuerID, req.Profile, toName(req.Subject), req.SANs, req.ValidityDays, key.Public(), key, &Record{
 		Kind: KindLeaf, Name: name, Source: SourceGenerated,
 	})
 }
 
 // SignCSR issues a leaf certificate for the public key in a CSR.
-func (s *Store) SignCSR(req CSRRequest) (View, error) {
+func (s *Store) SignCSR(sc Scope, req CSRRequest) (View, error) {
 	csr, err := ParseCSR(req.CSR)
 	if err != nil {
 		return View{}, &FieldError{Field: "csr", Msg: err.Error()}
@@ -203,16 +224,16 @@ func (s *Store) SignCSR(req CSRRequest) (View, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.issueLocked(req.IssuerID, req.Profile, toName(subject), sans, req.ValidityDays, csr.PublicKey, nil, &Record{
+	return s.issueLocked(sc, req.IssuerID, req.Profile, toName(subject), sans, req.ValidityDays, csr.PublicKey, nil, &Record{
 		Kind: KindLeaf, Name: name, Source: SourceCSR,
 	})
 }
 
 // Renew re-issues a leaf certificate from the same CA with the same
 // subject, SANs and profile.
-func (s *Store) Renew(id string, req RenewRequest) (View, error) {
+func (s *Store) Renew(sc Scope, id string, req RenewRequest) (View, error) {
 	s.mu.RLock()
-	old, err := s.get(id, KindLeaf)
+	old, err := s.find(sc, id, KindLeaf, true)
 	var oldKey crypto.Signer
 	if err == nil && req.ReuseKey && old.SealedKey != "" {
 		oldKey, err = s.key(old)
@@ -236,7 +257,7 @@ func (s *Store) Renew(id string, req RenewRequest) (View, error) {
 	case rec.SealedKey == "":
 		// Signed from a CSR: only the requester holds the key.
 		if !req.ReuseKey {
-			return View{}, &ConflictError{"this certificate was signed from a CSR; renew it with the same key or sign a new CSR"}
+			return View{}, &ConflictError{Msg: "this certificate was signed from a CSR; renew it with the same key or sign a new CSR"}
 		}
 		pub = cert.PublicKey
 	case req.ReuseKey:
@@ -260,7 +281,7 @@ func (s *Store) Renew(id string, req RenewRequest) (View, error) {
 	subject := cert.Subject
 	subject.Names, subject.ExtraNames = nil, nil
 	sans := sansOf(cert.DNSNames, cert.IPAddresses, cert.EmailAddresses, cert.URIs)
-	v, err := s.issueLocked(rec.IssuerID, rec.Profile, subject, sans, req.ValidityDays, pub, key, &Record{
+	v, err := s.issueLocked(sc, rec.IssuerID, rec.Profile, subject, sans, req.ValidityDays, pub, key, &Record{
 		Kind: KindLeaf, Name: rec.Name, Source: rec.Source, RenewedFrom: rec.ID,
 	})
 	if err != nil {
@@ -301,7 +322,7 @@ func (s *Store) Import(req ImportRequest) (View, error) {
 	defer s.mu.Unlock()
 	for _, e := range s.entries {
 		if string(e.cert.Raw) == string(cert.Raw) {
-			return View{}, &ConflictError{"this certificate is already stored as " + e.Name}
+			return View{}, &ConflictError{Msg: "this certificate is already stored as " + e.Name}
 		}
 	}
 	rec := &Record{ID: newID(), Kind: KindCA, Name: name, Profile: ProfileRoot, Source: SourceImported,
@@ -310,7 +331,7 @@ func (s *Store) Import(req ImportRequest) (View, error) {
 		rec.Profile = ProfileIntermediate
 		for _, e := range s.entries {
 			if e.Kind == KindCA && cert.CheckSignatureFrom(e.cert) == nil {
-				rec.IssuerID = e.ID
+				rec.IssuerID, rec.TenantID = e.ID, e.TenantID
 				break
 			}
 		}
@@ -335,11 +356,12 @@ func (s *Store) Import(req ImportRequest) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	return s.viewLocked(e, time.Now(), s.options().ExpiryWarn, true), nil
+	return s.viewLocked(s.ctxLocked(Platform), e, true), nil
 }
 
-func (s *Store) issueLocked(issuerID, profile string, subject pkix.Name, sans SANs, days int, pub crypto.PublicKey, key crypto.Signer, rec *Record) (View, error) {
-	issuer, issuerKey, err := s.issuerLocked(issuerID)
+// issueLocked signs a leaf certificate; it belongs to the issuer's tenant.
+func (s *Store) issueLocked(sc Scope, issuerID, profile string, subject pkix.Name, sans SANs, days int, pub crypto.PublicKey, key crypto.Signer, rec *Record) (View, error) {
+	issuer, issuerKey, err := s.issuerLocked(sc, issuerID)
 	if err != nil {
 		return View{}, err
 	}
@@ -370,51 +392,55 @@ func (s *Store) issueLocked(issuerID, profile string, subject pkix.Name, sans SA
 	}
 	clampValidity(tmpl, issuer.cert)
 	addIssuerURLs(tmpl, s.options().PublicBase, issuer.ID)
-	rec.IssuerID, rec.Profile = issuer.ID, profile
-	return s.storeLocked(tmpl, issuer.cert, issuerKey, key, rec)
+	rec.IssuerID, rec.TenantID, rec.Profile = issuer.ID, issuer.TenantID, profile
+	e, err := s.storeLocked(tmpl, issuer.cert, issuerKey, key, rec)
+	if err != nil {
+		return View{}, err
+	}
+	return s.viewLocked(s.ctxLocked(sc), e, true), nil
 }
 
 // storeLocked signs tmpl and saves the resulting record.
-func (s *Store) storeLocked(tmpl, parent *x509.Certificate, signer, key crypto.Signer, rec *Record) (View, error) {
+func (s *Store) storeLocked(tmpl, parent *x509.Certificate, signer, key crypto.Signer, rec *Record) (*entry, error) {
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, tmpl.PublicKey, signer)
 	if err != nil {
-		return View{}, fmt.Errorf("sign certificate: %w", err)
+		return nil, fmt.Errorf("sign certificate: %w", err)
 	}
 	cert, err := x509.ParseCertificate(der)
 	if err != nil {
-		return View{}, err
+		return nil, err
 	}
 	rec.ID, rec.CertPEM, rec.CreatedAt = newID(), certPEM(der), now()
 	if key != nil {
 		keyPEM, err := MarshalKeyPEM(key)
 		if err != nil {
-			return View{}, err
+			return nil, err
 		}
 		rec.SealedKey = s.sealer.seal(keyPEM, rec.ID)
 	}
 	e := &entry{Record: *rec, cert: cert}
 	if err := s.commitLocked(func() { s.entries = append(s.entries, e) }); err != nil {
-		return View{}, err
+		return nil, err
 	}
-	return s.viewLocked(e, time.Now(), s.options().ExpiryWarn, true), nil
+	return e, nil
 }
 
-// issuerLocked returns a CA able to sign, with its key.
-func (s *Store) issuerLocked(id string) (*entry, crypto.Signer, error) {
+// issuerLocked returns a CA of sc able to sign, with its key.
+func (s *Store) issuerLocked(sc Scope, id string) (*entry, crypto.Signer, error) {
 	if id == "" {
 		return nil, nil, &FieldError{Field: "issuerId", Msg: "choose the issuing CA"}
 	}
-	e, err := s.get(id, KindCA)
+	e, err := s.find(sc, id, KindCA, true)
 	if err != nil {
 		return nil, nil, err
 	}
 	switch {
 	case e.RevokedAt != nil:
-		return nil, nil, &ConflictError{e.Name + " is revoked and cannot issue certificates"}
+		return nil, nil, &ConflictError{Msg: e.Name + " is revoked and cannot issue certificates"}
 	case time.Now().After(e.cert.NotAfter):
-		return nil, nil, &ConflictError{e.Name + " has expired and cannot issue certificates"}
+		return nil, nil, &ConflictError{Msg: e.Name + " has expired and cannot issue certificates"}
 	case e.cert.KeyUsage != 0 && e.cert.KeyUsage&x509.KeyUsageCertSign == 0:
-		return nil, nil, &ConflictError{e.Name + " is not allowed to sign certificates (no keyCertSign usage)"}
+		return nil, nil, &ConflictError{Msg: e.Name + " is not allowed to sign certificates (no keyCertSign usage)"}
 	}
 	key, err := s.key(e)
 	if err != nil {

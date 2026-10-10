@@ -12,6 +12,7 @@ import (
 
 	"github.com/lieyanc/FireSSL/internal/auth"
 	"github.com/lieyanc/FireSSL/internal/config"
+	"github.com/lieyanc/FireSSL/internal/iam"
 	"github.com/lieyanc/FireSSL/internal/pki"
 )
 
@@ -58,8 +59,15 @@ func setupServer(t *testing.T) (*client, *auth.Service) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := auth.New(store)
-	s := NewForTest(Deps{Store: store, PKI: p, Auth: a, Started: time.Now()})
+	users, err := iam.Open(store.DataDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := auth.New(store, users)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewForTest(Deps{Store: store, PKI: p, Users: users, Auth: a, Started: time.Now()})
 	return &client{t: t, h: s.Handler()}, a
 }
 
@@ -147,5 +155,109 @@ func TestIssueAndDownload(t *testing.T) {
 	}
 	if w := anon.do("GET", "/api/certificates/"+leaf.ID+"/export?format=key", nil); w.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous key export: %d", w.Code)
+	}
+}
+
+func decodeJSON[T any](t *testing.T, w *httptest.ResponseRecorder) T {
+	t.Helper()
+	var v T
+	if err := json.Unmarshal(w.Body.Bytes(), &v); err != nil {
+		t.Fatalf("decode %s: %v", w.Body, err)
+	}
+	return v
+}
+
+func TestTenantPermissions(t *testing.T) {
+	admin, a := setupServer(t)
+	admin.do("POST", "/api/auth/setup", map[string]string{"setupToken": a.SetupToken(), "username": "admin", "password": "password123"})
+
+	newUser := func(name string) *client {
+		if w := admin.do("POST", "/api/users", map[string]any{"username": name, "password": "password123"}); w.Code != http.StatusCreated {
+			t.Fatalf("create user %s: %d %s", name, w.Code, w.Body)
+		}
+		c := &client{t: t, h: admin.h}
+		if w := c.do("POST", "/api/auth/login", map[string]string{"username": name, "password": "password123"}); w.Code != http.StatusOK {
+			t.Fatalf("login %s: %d", name, w.Code)
+		}
+		return c
+	}
+	owner, operator, viewer, outsider := newUser("owner"), newUser("operator"), newUser("viewer"), newUser("outsider")
+
+	if w := owner.do("GET", "/api/settings", nil); w.Code != http.StatusForbidden {
+		t.Fatalf("non-admin settings: %d", w.Code)
+	}
+	if w := owner.do("GET", "/api/overview", nil); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "tenant_required") {
+		t.Fatalf("overview without tenant: %d %s", w.Code, w.Body)
+	}
+
+	w := admin.do("POST", "/api/tenants", map[string]string{"name": "Acme"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create tenant: %d %s", w.Code, w.Body)
+	}
+	tenant := decodeJSON[tenantView](t, w).ID
+	for name, role := range map[string]string{"owner": "owner", "operator": "operator", "viewer": "viewer"} {
+		if w := admin.do("PUT", "/api/tenants/"+tenant+"/members", map[string]string{"username": name, "role": role}); w.Code != http.StatusOK {
+			t.Fatalf("add %s: %d %s", name, w.Code, w.Body)
+		}
+	}
+	in := func(c *client, method, path string, body any) *httptest.ResponseRecorder {
+		return c.do(method, path, body, TenantHeader, tenant)
+	}
+
+	root := decodeJSON[pki.View](t, admin.do("POST", "/api/authorities", map[string]any{"subject": map[string]string{"commonName": "Root"}}))
+	if w := in(owner, "POST", "/api/authorities", map[string]any{"subject": map[string]string{"commonName": "Owner Root"}}); w.Code != http.StatusForbidden {
+		t.Fatalf("owner created root: %d", w.Code)
+	}
+	w = admin.do("POST", "/api/authorities", map[string]any{"issuerId": root.ID, "tenantId": tenant, "subject": map[string]string{"commonName": "Acme Issuing"}})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("tenant sub-CA: %d %s", w.Code, w.Body)
+	}
+	sub := decodeJSON[pki.View](t, w)
+
+	if w := in(viewer, "POST", "/api/certificates", map[string]any{"issuerId": sub.ID, "subject": map[string]string{"commonName": "v.example.com"}}); w.Code != http.StatusForbidden {
+		t.Fatalf("viewer issued: %d", w.Code)
+	}
+	w = in(operator, "POST", "/api/certificates", map[string]any{"issuerId": sub.ID, "subject": map[string]string{"commonName": "o.example.com"}})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("operator issue: %d %s", w.Code, w.Body)
+	}
+	leaf := decodeJSON[pki.View](t, w)
+	if w := in(operator, "POST", "/api/authorities", map[string]any{"issuerId": sub.ID, "subject": map[string]string{"commonName": "Op Sub"}}); w.Code != http.StatusForbidden {
+		t.Fatalf("operator created sub-CA: %d", w.Code)
+	}
+	if w := in(owner, "POST", "/api/authorities", map[string]any{"issuerId": sub.ID, "subject": map[string]string{"commonName": "Owner Sub"}}); w.Code != http.StatusCreated {
+		t.Fatalf("owner sub-CA: %d %s", w.Code, w.Body)
+	}
+	if w := in(viewer, "GET", "/api/certificates/"+leaf.ID+"/export?format=key", nil); w.Code != http.StatusForbidden {
+		t.Fatalf("viewer key export: %d", w.Code)
+	}
+	if w := in(viewer, "GET", "/api/certificates/"+leaf.ID+"/export?format=fullchain", nil); w.Code != http.StatusOK {
+		t.Fatalf("viewer chain export: %d", w.Code)
+	}
+	if w := in(owner, "GET", "/api/authorities/"+root.ID+"/export?format=key", nil); w.Code != http.StatusForbidden {
+		t.Fatalf("tenant exported the root key: %d", w.Code)
+	}
+	if w := in(outsider, "GET", "/api/certificates", nil); w.Code != http.StatusForbidden {
+		t.Fatalf("outsider listed tenant: %d", w.Code)
+	}
+	// Owners manage members but cannot leave the tenant ownerless.
+	if w := in(operator, "PUT", "/api/tenants/"+tenant+"/members", map[string]string{"username": "outsider", "role": "viewer"}); w.Code != http.StatusForbidden {
+		t.Fatalf("operator managed members: %d", w.Code)
+	}
+	ownerID := decodeJSON[struct{ User struct{ ID string } }](t, owner.do("GET", "/api/auth/state", nil)).User.ID
+	if w := owner.do("DELETE", "/api/tenants/"+tenant+"/members/"+ownerID, nil); w.Code != http.StatusConflict {
+		t.Fatalf("last owner left: %d", w.Code)
+	}
+	if w := admin.do("DELETE", "/api/tenants/"+tenant, nil); w.Code != http.StatusConflict {
+		t.Fatalf("deleted tenant with records: %d", w.Code)
+	}
+
+	// Disabling a user ends their sessions.
+	viewerID := decodeJSON[struct{ User struct{ ID string } }](t, viewer.do("GET", "/api/auth/state", nil)).User.ID
+	if w := admin.do("PATCH", "/api/users/"+viewerID, map[string]any{"disabled": true}); w.Code != http.StatusOK {
+		t.Fatalf("disable: %d %s", w.Code, w.Body)
+	}
+	if w := in(viewer, "GET", "/api/certificates", nil); w.Code != http.StatusUnauthorized {
+		t.Fatalf("disabled user still signed in: %d", w.Code)
 	}
 }

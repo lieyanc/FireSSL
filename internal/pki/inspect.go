@@ -46,8 +46,9 @@ type CRLDetails struct {
 	Revoked      []string `json:"revoked"` // serial numbers, at most 100
 }
 
-// Inspect decodes every PEM block in text.
-func (s *Store) Inspect(text string) ([]Inspected, error) {
+// Inspect decodes every PEM block in text, linking certificates stored in
+// records sc can see.
+func (s *Store) Inspect(sc Scope, text string) ([]Inspected, error) {
 	rest := []byte(text)
 	var out []Inspected
 	var certs []*x509.Certificate
@@ -72,8 +73,9 @@ func (s *Store) Inspect(text string) ([]Inspected, error) {
 			item.Certificate = &d
 			certs, certIdx = append(certs, c), append(certIdx, len(out))
 			s.mu.RLock()
+			vis := s.visibleLocked(sc)
 			for _, e := range s.entries {
-				if string(e.cert.Raw) == string(c.Raw) {
+				if string(e.cert.Raw) == string(c.Raw) && canSee(vis, e.ID) {
 					item.KnownID, item.KnownKind = e.ID, e.Kind
 				}
 			}

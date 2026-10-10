@@ -37,8 +37,18 @@ const (
 	typeP12 = "application/x-pkcs12"
 )
 
-// Export renders a stored certificate in one of the formats above.
-func (s *Store) Export(id, kind, format string) (File, error) {
+// PrivateFormat reports whether an export format contains the private key.
+func PrivateFormat(format string) bool { return format == FormatKey || format == FormatBundle }
+
+// Export renders a stored certificate in one of the formats above. Formats
+// with the private key need a record sc owns; public ones any it can see.
+func (s *Store) Export(sc Scope, id, kind, format string) (File, error) {
+	s.mu.RLock()
+	_, err := s.find(sc, id, kind, PrivateFormat(format))
+	s.mu.RUnlock()
+	if err != nil {
+		return File{}, err
+	}
 	if format == FormatCRL || format == FormatCRLPEM {
 		der, err := s.CRL(id)
 		if err != nil {
@@ -74,7 +84,7 @@ func (s *Store) Export(id, kind, format string) (File, error) {
 		return File{stem + ".key", typePEM, key}, nil
 	case FormatChain:
 		if len(chain) == 0 {
-			return File{}, &ConflictError{"no issuing CA is stored for " + e.Name}
+			return File{}, &ConflictError{Msg: "no issuing CA is stored for " + e.Name}
 		}
 		return File{stem + ".chain.pem", typePEM, joinPEM(chain)}, nil
 	case FormatFullchain:
@@ -111,13 +121,13 @@ func (s *Store) Export(id, kind, format string) (File, error) {
 
 // PKCS12 bundles the certificate, its key and the issuing chain. legacy
 // selects 3DES/SHA-1 encryption for older Windows and macOS releases.
-func (s *Store) PKCS12(id, kind, password string, legacy bool) (File, error) {
+func (s *Store) PKCS12(sc Scope, id, kind, password string, legacy bool) (File, error) {
 	if utf8.RuneCountInString(password) < 4 {
 		return File{}, &FieldError{Field: "password", Msg: "password must be at least 4 characters"}
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	e, err := s.get(id, kind)
+	e, err := s.find(sc, id, kind, true)
 	if err != nil {
 		return File{}, err
 	}
@@ -142,7 +152,7 @@ func (s *Store) PKCS12(id, kind, password string, legacy bool) (File, error) {
 
 func (s *Store) keyPEM(e *entry) ([]byte, error) {
 	if e.SealedKey == "" {
-		return nil, &ConflictError{"no private key is stored for " + e.Name}
+		return nil, &ConflictError{Msg: "no private key is stored for " + e.Name}
 	}
 	return s.sealer.open(e.SealedKey, e.ID)
 }

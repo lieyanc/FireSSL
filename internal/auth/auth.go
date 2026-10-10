@@ -1,6 +1,6 @@
-// Package auth implements the administrator login: a bcrypt password stored
-// in the config, HMAC-signed session cookies, a one-time setup token for the
-// first start (or after -reset-auth) and brute-force throttling.
+// Package auth implements sign-in for the accounts in the user directory:
+// bcrypt passwords, HMAC-signed session cookies, a one-time setup token for
+// the first start (or after -reset-auth) and brute-force throttling.
 package auth
 
 import (
@@ -24,6 +24,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/lieyanc/FireSSL/internal/config"
+	"github.com/lieyanc/FireSSL/internal/iam"
 )
 
 const CookieName = "firessl_session"
@@ -44,7 +45,13 @@ func (e *RateLimitError) Error() string {
 
 // Principal is an authenticated caller.
 type Principal struct {
+	ID       string
 	Username string
+	Admin    bool
+}
+
+func principal(u iam.User) *Principal {
+	return &Principal{ID: u.ID, Username: u.Username, Admin: u.Admin}
 }
 
 type ctxKey struct{}
@@ -61,23 +68,41 @@ func FromContext(ctx context.Context) *Principal {
 
 type Service struct {
 	store    *config.Store
+	users    *iam.Store
 	throttle *throttle
 
 	mu         sync.Mutex
 	setupToken string
 }
 
-func New(store *config.Store) *Service {
-	return &Service{store: store, throttle: newThrottle(), setupToken: randomString(12)}
+// New returns the service, first moving the single administrator of
+// earlier releases from the config file into the directory.
+func New(store *config.Store, users *iam.Store) (*Service, error) {
+	s := &Service{store: store, users: users, throttle: newThrottle(), setupToken: randomString(12)}
+	a := store.Get().Auth
+	if a.Username == "" || a.PasswordHash == "" {
+		return s, nil
+	}
+	if _, ok := users.UserByName(a.Username); !ok {
+		if _, err := users.CreateUser(iam.User{Username: a.Username, PasswordHash: a.PasswordHash, Admin: true}); err != nil {
+			return nil, fmt.Errorf("migrate administrator: %w", err)
+		}
+	}
+	if _, err := store.Update(func(c *config.Config) error {
+		c.Auth.Username, c.Auth.PasswordHash = "", ""
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("migrate administrator: %w", err)
+	}
+	return s, nil
 }
 
-// Initialized reports whether the administrator can sign in.
+// Initialized reports whether a system administrator can sign in.
 func (s *Service) Initialized() bool {
-	a := s.store.Get().Auth
-	return a.Username != "" && a.PasswordHash != ""
+	return s.users.HasAdmin()
 }
 
-// SetupAvailable reports whether the setup token may (re)create the
+// SetupAvailable reports whether the setup token may create a system
 // administrator: before the first start completes, or after -reset-auth.
 func (s *Service) SetupAvailable() bool {
 	return s.store.Get().Auth.Recovery || !s.Initialized()
@@ -94,43 +119,58 @@ func (s *Service) SetupToken() string {
 	return s.setupToken
 }
 
-// Setup creates the administrator, or replaces it in recovery mode.
-func (s *Service) Setup(token, username, pass string) error {
+// Setup creates the first system administrator. In recovery mode it
+// instead resets the named account (creating it if needed) to an enabled
+// administrator with the given password.
+func (s *Service) Setup(token, username, pass string) (*Principal, error) {
 	if !s.SetupAvailable() {
-		return ErrInitialized
+		return nil, ErrInitialized
 	}
 	s.mu.Lock()
 	want := s.setupToken
 	s.mu.Unlock()
 	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(token)), []byte(want)) != 1 {
-		return ErrBadSetupToken
+		return nil, ErrBadSetupToken
 	}
 	if err := ValidateUsername("username", username); err != nil {
-		return err
+		return nil, err
 	}
-	if err := validatePassword("password", pass); err != nil {
-		return err
+	if err := ValidatePassword("password", pass); err != nil {
+		return nil, err
 	}
-	hash, err := hashPassword(pass)
+	hash, err := HashPassword(pass)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	_, err = s.store.Update(func(c *config.Config) error {
-		if !c.Auth.Recovery && c.Auth.Username != "" && c.Auth.PasswordHash != "" {
-			return ErrInitialized
-		}
-		c.Auth.Username, c.Auth.PasswordHash = username, hash
+	recovery := s.store.Get().Auth.Recovery
+	if !recovery && s.Initialized() {
+		return nil, ErrInitialized
+	}
+	var u iam.User
+	if existing, ok := s.users.UserByName(username); ok {
+		u, err = s.users.UpdateUser(existing.ID, func(u *iam.User) error {
+			u.PasswordHash, u.Admin, u.Disabled = hash, true, false
+			u.SessionGen++
+			return nil
+		})
+	} else {
+		u, err = s.users.CreateUser(iam.User{Username: username, PasswordHash: hash, Admin: true})
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.store.Update(func(c *config.Config) error {
 		c.Auth.Recovery = false
-		// A new secret signs out every session of a replaced administrator.
+		// A new secret signs out every session.
 		c.Auth.SessionSecret = randomString(32)
 		return nil
-	})
-	if err == nil {
-		s.mu.Lock()
-		s.setupToken = randomString(12)
-		s.mu.Unlock()
+	}); err != nil {
+		return nil, err
 	}
-	return err
+	s.mu.Lock()
+	s.setupToken = randomString(12)
+	s.mu.Unlock()
+	return principal(u), nil
 }
 
 // Login checks credentials, throttling per client IP.
@@ -141,54 +181,115 @@ func (s *Service) Login(username, pass, ip string) (*Principal, error) {
 	if wait := s.throttle.blocked(ip); wait > 0 {
 		return nil, &RateLimitError{wait}
 	}
-	a := s.store.Get().Auth
+	u, match := s.users.UserByName(username)
 	hash := dummyHash
-	match := subtle.ConstantTimeCompare([]byte(username), []byte(a.Username)) == 1
 	if match {
-		hash = a.PasswordHash
+		hash = u.PasswordHash
 	}
 	// Always run bcrypt so response time does not reveal the username.
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(pass)) != nil || !match {
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(pass)) != nil || !match || u.Disabled {
 		s.throttle.fail(ip)
 		return nil, ErrInvalidCredentials
 	}
 	s.throttle.reset(ip)
-	return &Principal{Username: a.Username}, nil
+	return principal(u), nil
 }
 
 // dummyHash keeps unknown usernames as slow as real ones.
-var dummyHash, _ = hashPassword(randomString(16))
+var dummyHash, _ = HashPassword(randomString(16))
 
-// ChangeCredentials verifies the current password and sets a new password
-// and optionally a new username, signing out all other sessions.
-func (s *Service) ChangeCredentials(current, next, username string) (*Principal, error) {
+// ChangeCredentials verifies the caller's current password and sets a new
+// password and optionally a new username, signing out their other sessions.
+func (s *Service) ChangeCredentials(p *Principal, current, next, username string) (*Principal, error) {
 	if username != "" {
 		if err := ValidateUsername("username", username); err != nil {
 			return nil, err
 		}
 	}
-	if err := validatePassword("newPassword", next); err != nil {
+	if err := ValidatePassword("newPassword", next); err != nil {
 		return nil, err
 	}
-	hash, err := hashPassword(next)
+	hash, err := HashPassword(next)
 	if err != nil {
 		return nil, err
 	}
-	c, err := s.store.Update(func(c *config.Config) error {
-		if bcrypt.CompareHashAndPassword([]byte(c.Auth.PasswordHash), []byte(current)) != nil {
+	u, err := s.users.UpdateUser(p.ID, func(u *iam.User) error {
+		if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(current)) != nil {
 			return &config.FieldError{Field: "currentPassword", Msg: "current password is incorrect"}
 		}
 		if username != "" {
-			c.Auth.Username = username
+			u.Username = username
 		}
-		c.Auth.PasswordHash = hash
-		c.Auth.SessionSecret = randomString(32)
+		u.PasswordHash = hash
+		u.SessionGen++
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &Principal{Username: c.Auth.Username}, nil
+	return principal(u), nil
+}
+
+// UserChange is an administrator's edit of an account; nil fields are kept.
+type UserChange struct {
+	Username *string `json:"username"`
+	Password *string `json:"password"`
+	Admin    *bool   `json:"admin"`
+	Disabled *bool   `json:"disabled"`
+}
+
+// CreateUser adds an account.
+func (s *Service) CreateUser(username, pass string, admin bool) (iam.User, error) {
+	if err := ValidateUsername("username", username); err != nil {
+		return iam.User{}, err
+	}
+	if err := ValidatePassword("password", pass); err != nil {
+		return iam.User{}, err
+	}
+	hash, err := HashPassword(pass)
+	if err != nil {
+		return iam.User{}, err
+	}
+	return s.users.CreateUser(iam.User{Username: username, PasswordHash: hash, Admin: admin})
+}
+
+// UpdateUser applies an administrator's change. A new password or
+// disabling the account signs out its sessions.
+func (s *Service) UpdateUser(id string, c UserChange) (iam.User, error) {
+	if c.Username != nil {
+		if err := ValidateUsername("username", *c.Username); err != nil {
+			return iam.User{}, err
+		}
+	}
+	var hash string
+	if c.Password != nil {
+		if err := ValidatePassword("password", *c.Password); err != nil {
+			return iam.User{}, err
+		}
+		var err error
+		if hash, err = HashPassword(*c.Password); err != nil {
+			return iam.User{}, err
+		}
+	}
+	return s.users.UpdateUser(id, func(u *iam.User) error {
+		if c.Username != nil {
+			u.Username = *c.Username
+		}
+		if c.Admin != nil {
+			u.Admin = *c.Admin
+		}
+		if hash != "" {
+			u.PasswordHash = hash
+			u.SessionGen++
+		}
+		if c.Disabled != nil {
+			if *c.Disabled && !u.Disabled {
+				u.SessionGen++
+			}
+			u.Disabled = *c.Disabled
+		}
+		return nil
+	})
 }
 
 func ValidateUsername(field, name string) error {
@@ -203,20 +304,21 @@ func ValidateUsername(field, name string) error {
 	return nil
 }
 
-func validatePassword(field, pass string) error {
+func ValidatePassword(field, pass string) error {
 	if n := utf8.RuneCountInString(pass); n < 8 || n > 128 {
 		return &config.FieldError{Field: field, Msg: "password must be 8-128 characters"}
 	}
 	return nil
 }
 
-func hashPassword(pass string) (string, error) {
+func HashPassword(pass string) (string, error) {
 	h, err := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
 	return string(h), err
 }
 
-// Sessions: value = base64url(username|expiry) "." base64url(hmac). The
-// secret rotates whenever the credentials change.
+// Sessions: value = base64url(userID|generation|expiry) "." base64url(hmac).
+// The secret rotates on setup; a user's generation changes with their
+// password or when they are disabled.
 
 func sign(secret, payload string) string {
 	m := hmac.New(sha256.New, []byte(secret))
@@ -224,11 +326,15 @@ func sign(secret, payload string) string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
-// SetSession issues a session cookie for the administrator.
-func (s *Service) SetSession(w http.ResponseWriter, r *http.Request) {
+// SetSession issues a session cookie for p.
+func (s *Service) SetSession(w http.ResponseWriter, r *http.Request, p *Principal) {
+	u, ok := s.users.User(p.ID)
+	if !ok {
+		return
+	}
 	a := s.store.Get().Auth
 	exp := time.Now().Add(time.Duration(a.SessionTTL) * time.Second)
-	payload := a.Username + "|" + strconv.FormatInt(exp.Unix(), 10)
+	payload := u.ID + "|" + strconv.Itoa(u.SessionGen) + "|" + strconv.FormatInt(exp.Unix(), 10)
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
 		Value:    base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + sign(a.SessionSecret, payload),
@@ -266,20 +372,23 @@ func (s *Service) Authenticate(r *http.Request) *Principal {
 		return nil
 	}
 	payload := string(raw)
-	name, expiry, ok := strings.Cut(payload, "|")
-	if !ok {
+	parts := strings.Split(payload, "|")
+	if len(parts) != 3 {
 		return nil
 	}
-	exp, err := strconv.ParseInt(expiry, 10, 64)
+	exp, err := strconv.ParseInt(parts[2], 10, 64)
 	if err != nil || time.Now().Unix() > exp {
 		return nil
 	}
-	a := s.store.Get().Auth
-	if a.SessionSecret == "" || a.PasswordHash == "" || name != a.Username ||
-		!hmac.Equal([]byte(sig), []byte(sign(a.SessionSecret, payload))) {
+	secret := s.store.Get().Auth.SessionSecret
+	if secret == "" || !hmac.Equal([]byte(sig), []byte(sign(secret, payload))) {
 		return nil
 	}
-	return &Principal{Username: name}
+	u, ok := s.users.User(parts[0])
+	if !ok || u.Disabled || strconv.Itoa(u.SessionGen) != parts[1] {
+		return nil
+	}
+	return principal(u)
 }
 
 func randomString(n int) string {
