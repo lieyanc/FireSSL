@@ -1,30 +1,12 @@
-# Dependencies
-node_modules/
+/config.json
+/data/
+/bin/
+/dist/
+/firessl
+*.exe
+*.log
 
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Data
-data/firessl.json
-data/keys/
-data/certs/
-
-# IDE
+.claude/launch.json
 .idea/
 .vscode/
-*.swp
-*.swo
-
-# OS
 .DS_Store
-Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# Build
-dist/
-build/
