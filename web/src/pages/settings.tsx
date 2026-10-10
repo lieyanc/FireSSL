@@ -12,22 +12,34 @@ import { AccountTab } from "@/features/settings/account-tab"
 import { GeneralTab } from "@/features/settings/general-tab"
 import { UpdateTab } from "@/features/settings/update-tab"
 import { useI18n } from "@/i18n"
+import { useWorkspace } from "@/lib/workspace"
 
 type Tab = "general" | "account" | "update"
 
-const TABS: { value: Tab; icon: LucideIcon; Content: () => React.ReactNode }[] =
-  [
-    { value: "general", icon: SlidersHorizontalIcon, Content: GeneralTab },
-    { value: "account", icon: UserIcon, Content: AccountTab },
-    { value: "update", icon: DownloadIcon, Content: UpdateTab },
-  ]
+const ALL_TABS: {
+  value: Tab
+  icon: LucideIcon
+  Content: () => React.ReactNode
+  adminOnly?: boolean
+}[] = [
+  {
+    value: "general",
+    icon: SlidersHorizontalIcon,
+    Content: GeneralTab,
+    adminOnly: true,
+  },
+  { value: "account", icon: UserIcon, Content: AccountTab },
+  { value: "update", icon: DownloadIcon, Content: UpdateTab, adminOnly: true },
+]
 
 export default function SettingsPage() {
   const { t } = useI18n()
   const navigate = useNavigate()
   const params = useParams()
+  const { admin } = useWorkspace()
+  const TABS = ALL_TABS.filter((def) => admin || !def.adminOnly)
   const tab: Tab =
-    TABS.find((def) => def.value === params.tab)?.value ?? "general"
+    TABS.find((def) => def.value === params.tab)?.value ?? TABS[0].value
 
   return (
     <PageContainer className="max-w-4xl">

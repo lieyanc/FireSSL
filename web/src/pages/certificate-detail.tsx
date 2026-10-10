@@ -17,12 +17,14 @@ import { RenewDialog } from "@/features/certs/record-dialogs"
 import { DownloadButton, RecordMenu } from "@/features/certs/record-menu"
 import { useI18n } from "@/i18n"
 import { useRecord } from "@/lib/queries"
+import { useWorkspace } from "@/lib/workspace"
 
 export default function CertificateDetailPage() {
   const { t, fmt } = useI18n()
   const { id = "" } = useParams()
   const navigate = useNavigate()
   const record = useRecord("leaf", id)
+  const ws = useWorkspace()
   const [renewOpen, setRenewOpen] = React.useState(false)
 
   if (record.isPending) {
@@ -44,6 +46,7 @@ export default function CertificateDetailPage() {
     )
   }
   const r = record.data
+  const manage = ws.canManage(r)
 
   return (
     <PageContainer>
@@ -59,10 +62,12 @@ export default function CertificateDetailPage() {
         }
         actions={
           <>
-            <Button variant="outline" onClick={() => setRenewOpen(true)}>
-              <RefreshCwIcon data-icon="inline-start" />
-              {t("certs.renew.short")}
-            </Button>
+            {manage && (
+              <Button variant="outline" onClick={() => setRenewOpen(true)}>
+                <RefreshCwIcon data-icon="inline-start" />
+                {t("certs.renew.short")}
+              </Button>
+            )}
             <DownloadButton record={r} />
             <RecordMenu
               record={r}
@@ -84,7 +89,9 @@ export default function CertificateDetailPage() {
           <PemBlock pem={r.certPem ?? ""} />
         </TabsContent>
       </Tabs>
-      <RenewDialog record={r} open={renewOpen} onOpenChange={setRenewOpen} />
+      {manage && (
+        <RenewDialog record={r} open={renewOpen} onOpenChange={setRenewOpen} />
+      )}
     </PageContainer>
   )
 }

@@ -1,9 +1,11 @@
 import {
+  BuildingIcon,
   FileBadgeIcon,
   LayoutDashboardIcon,
   ScanSearchIcon,
   SettingsIcon,
   ShieldIcon,
+  UsersIcon,
   type LucideIcon,
 } from "lucide-react"
 
@@ -24,6 +26,17 @@ export const NAV_MAIN: NavItem[] = [
 export const NAV_TOOLS: NavItem[] = [
   { to: "/inspect", label: "shell.nav.inspect", icon: ScanSearchIcon },
 ]
+
+/** System administrators only. */
+export const NAV_ADMIN: NavItem[] = [
+  { to: "/tenants", label: "shell.nav.tenants", icon: BuildingIcon },
+  { to: "/users", label: "shell.nav.users", icon: UsersIcon },
+]
+
+/** Members of the current tenant, for those who manage them. */
+export function membersNav(tenantId: string): NavItem {
+  return { to: `/tenants/${tenantId}`, label: "shell.nav.members", icon: UsersIcon }
+}
 
 /** Pinned to the bottom of the sidebar, above the account menu. */
 export const NAV_SECONDARY: NavItem[] = [

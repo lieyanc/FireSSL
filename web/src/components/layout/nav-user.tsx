@@ -24,9 +24,11 @@ import { api } from "@/lib/api"
 import { toastError } from "@/lib/errors"
 import { useAuthState, useVersion } from "@/lib/queries"
 import { signedOut } from "@/lib/session"
+import { useWorkspace } from "@/lib/workspace"
 
 function UserIdentity({ username }: { username: string }) {
   const { t } = useI18n()
+  const ws = useWorkspace()
   return (
     <>
       <Avatar className="rounded-lg after:rounded-lg">
@@ -37,7 +39,11 @@ function UserIdentity({ username }: { username: string }) {
       <div className="grid flex-1 text-left text-sm leading-tight">
         <span className="truncate font-medium">{username}</span>
         <span className="truncate text-xs text-muted-foreground">
-          {t("shell.user.administrator")}
+          {ws.admin
+            ? t("access.roles.admin")
+            : ws.tenant
+              ? t(`access.roles.${ws.tenant.role}`)
+              : t("access.workspace.none")}
         </span>
       </div>
     </>

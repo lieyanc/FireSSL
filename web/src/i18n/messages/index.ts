@@ -1,4 +1,5 @@
 import type { MessagePath } from "@/i18n/define"
+import { access } from "@/i18n/messages/access"
 import { auth } from "@/i18n/messages/auth"
 import { authorities } from "@/i18n/messages/authorities"
 import { certs } from "@/i18n/messages/certs"
@@ -16,6 +17,7 @@ const namespaces = {
   certs,
   inspect,
   settings,
+  access,
 }
 
 type Namespaces = typeof namespaces

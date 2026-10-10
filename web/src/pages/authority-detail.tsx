@@ -37,10 +37,11 @@ import { useI18n } from "@/i18n"
 import {
   useAuthorities,
   useCertificates,
+  usePkiDefaults,
   useRecord,
-  useSettings,
 } from "@/lib/queries"
 import type { CertRecord } from "@/lib/types"
+import { useWorkspace } from "@/lib/workspace"
 
 function IssuedTab({ ca }: { ca: CertRecord }) {
   const { t } = useI18n()
@@ -86,8 +87,8 @@ function IssuedTab({ ca }: { ca: CertRecord }) {
 
 function DistributionCard({ ca }: { ca: CertRecord }) {
   const { t } = useI18n()
-  const settings = useSettings()
-  const publicUrl = settings.data?.pki.publicUrl.replace(/\/+$/, "")
+  const defaults = usePkiDefaults()
+  const publicUrl = defaults.data?.publicUrl.replace(/\/+$/, "")
   const origin = publicUrl || window.location.origin
   const rows = [
     {
@@ -128,6 +129,7 @@ export default function AuthorityDetailPage() {
   const { id = "" } = useParams()
   const navigate = useNavigate()
   const record = useRecord("ca", id)
+  const ws = useWorkspace()
   const [issueOpen, setIssueOpen] = React.useState(false)
 
   if (record.isPending) {
@@ -149,7 +151,7 @@ export default function AuthorityDetailPage() {
     )
   }
   const ca = record.data
-  const issuing = canIssue(ca)
+  const issuing = canIssue(ca) && !ca.readOnly && ws.can("issue")
 
   return (
     <PageContainer>

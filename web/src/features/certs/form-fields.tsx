@@ -48,7 +48,9 @@ export function IssuerSelect({
   const authorities = useAuthorities()
   const items = (authorities.data ?? []).filter(
     (ca) =>
-      canIssue(ca) && !(exclude === "no-sub-ca" && ca.details.pathLen === 0)
+      canIssue(ca) &&
+      !ca.readOnly &&
+      !(exclude === "no-sub-ca" && ca.details.pathLen === 0)
   )
   return (
     <Select

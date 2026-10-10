@@ -16,6 +16,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { keyAlgorithmLabel } from "@/features/certs/options"
+import { OwnerBadge } from "@/features/certs/record-detail"
 import { RecordMenu } from "@/features/certs/record-menu"
 import { StatusBadge } from "@/features/certs/status-badge"
 import { useI18n } from "@/i18n"
@@ -218,6 +219,7 @@ export function AuthoritiesTable({ items }: { items: CertRecord[] }) {
                     {t("common.source.imported")}
                   </Badge>
                 )}
+                <OwnerBadge record={r} />
               </div>
             </TableCell>
             <TableCell className="hidden tabular-nums lg:table-cell">

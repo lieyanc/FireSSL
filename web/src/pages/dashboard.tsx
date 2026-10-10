@@ -48,6 +48,7 @@ import { StatusBadge } from "@/features/certs/status-badge"
 import { useI18n } from "@/i18n"
 import { daysUntil } from "@/lib/format"
 import { useOverview } from "@/lib/queries"
+import { useWorkspace } from "@/lib/workspace"
 import type { CertRecord, Overview } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -244,8 +245,29 @@ function Lists({ data }: { data: Overview }) {
   )
 }
 
+/** A tenant without a sub-CA cannot do anything until one is assigned. */
+function TenantOnboarding() {
+  const { t } = useI18n()
+  return (
+    <Card>
+      <Empty className="py-12">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <ShieldIcon />
+          </EmptyMedia>
+          <EmptyTitle>{t("access.tenantEmpty.title")}</EmptyTitle>
+          <EmptyDescription>
+            {t("access.tenantEmpty.description")}
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    </Card>
+  )
+}
+
 export default function DashboardPage() {
   const { t } = useI18n()
+  const ws = useWorkspace()
   const overview = useOverview()
   const [dialog, setDialog] = React.useState<"ca" | "import" | "issue" | null>(
     null
@@ -262,14 +284,20 @@ export default function DashboardPage() {
         actions={
           !empty && (
             <>
-              <Button variant="outline" onClick={() => setDialog("ca")}>
-                <ShieldPlusIcon data-icon="inline-start" />
-                {t("authorities.newCa")}
-              </Button>
-              <Button onClick={() => setDialog("issue")} disabled={!data}>
-                <FilePlus2Icon data-icon="inline-start" />
-                {t("certs.issue.short")}
-              </Button>
+              {ws.can("manageCa") && (
+                <Button variant="outline" onClick={() => setDialog("ca")}>
+                  <ShieldPlusIcon data-icon="inline-start" />
+                  {ws.platform
+                    ? t("authorities.newCa")
+                    : t("authorities.newSubCa")}
+                </Button>
+              )}
+              {ws.can("issue") && (
+                <Button onClick={() => setDialog("issue")} disabled={!data}>
+                  <FilePlus2Icon data-icon="inline-start" />
+                  {t("certs.issue.short")}
+                </Button>
+              )}
             </>
           )
         }
@@ -288,6 +316,8 @@ export default function DashboardPage() {
           </div>
           <Skeleton className="h-64" />
         </>
+      ) : empty && !ws.platform ? (
+        <TenantOnboarding />
       ) : empty ? (
         <Onboarding
           onCreate={() => setDialog("ca")}
@@ -338,7 +368,9 @@ export default function DashboardPage() {
         </>
       )}
       <CAFormDialog open={dialog === "ca"} onOpenChange={close} />
-      <ImportCADialog open={dialog === "import"} onOpenChange={close} />
+      {ws.platform && (
+        <ImportCADialog open={dialog === "import"} onOpenChange={close} />
+      )}
       <IssueDialog open={dialog === "issue"} onOpenChange={close} />
     </PageContainer>
   )

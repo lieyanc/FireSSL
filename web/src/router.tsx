@@ -15,6 +15,9 @@ const CertificatesPage = lazy(() => import("@/pages/certificates"))
 const CertificateDetailPage = lazy(() => import("@/pages/certificate-detail"))
 const InspectPage = lazy(() => import("@/pages/inspect"))
 const SettingsPage = lazy(() => import("@/pages/settings"))
+const TenantsPage = lazy(() => import("@/pages/tenants"))
+const TenantDetailPage = lazy(() => import("@/pages/tenant-detail"))
+const UsersPage = lazy(() => import("@/pages/users"))
 const NotFoundPage = lazy(() => import("@/pages/not-found"))
 
 const handle = (h: RouteHandle) => h
@@ -53,6 +56,13 @@ export const router = createBrowserRouter([
           },
           { path: "inspect", element: <InspectPage />, handle: handle({ section: "shell.nav.inspect" }) },
           { path: "settings/:tab?", element: <SettingsPage />, handle: handle({ section: "shell.nav.settings" }) },
+          { path: "tenants", element: <TenantsPage />, handle: handle({ section: "shell.nav.tenants" }) },
+          {
+            path: "tenants/:id",
+            element: <TenantDetailPage />,
+            handle: handle({ section: "shell.nav.tenants", sectionPath: "/tenants", recordKind: "tenant" }),
+          },
+          { path: "users", element: <UsersPage />, handle: handle({ section: "shell.nav.users" }) },
           { path: "*", element: <NotFoundPage /> },
         ],
       },

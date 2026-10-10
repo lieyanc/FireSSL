@@ -35,7 +35,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { LANG_LABELS, LANGS, useI18n, type Lang, type MessageKey } from "@/i18n"
-import { useRecord } from "@/lib/queries"
+import { useRecord, useTenant } from "@/lib/queries"
 import type { RecordKind } from "@/lib/types"
 
 export type RouteHandle = {
@@ -43,7 +43,7 @@ export type RouteHandle = {
   section?: MessageKey
   sectionPath?: string
   /** Adds the record name as a second crumb (detail pages). */
-  recordKind?: RecordKind
+  recordKind?: RecordKind | "tenant"
 }
 
 function RecordCrumb({ kind }: { kind: RecordKind }) {
@@ -52,6 +52,16 @@ function RecordCrumb({ kind }: { kind: RecordKind }) {
   return (
     <BreadcrumbPage className="truncate">
       {record.data?.name || id}
+    </BreadcrumbPage>
+  )
+}
+
+function TenantCrumb() {
+  const { id = "" } = useParams()
+  const tenant = useTenant(id)
+  return (
+    <BreadcrumbPage className="truncate">
+      {tenant.data?.name || id}
     </BreadcrumbPage>
   )
 }
@@ -79,7 +89,11 @@ function PageBreadcrumb() {
             </BreadcrumbItem>
             <BreadcrumbSeparator className="hidden sm:block" />
             <BreadcrumbItem className="min-w-0">
-              <RecordCrumb kind={handle.recordKind} />
+              {handle.recordKind === "tenant" ? (
+                <TenantCrumb />
+              ) : (
+                <RecordCrumb kind={handle.recordKind} />
+              )}
             </BreadcrumbItem>
           </>
         ) : (

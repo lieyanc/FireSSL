@@ -45,7 +45,7 @@ import { useI18n, type Translate } from "@/i18n"
 import { api } from "@/lib/api"
 import { errorMessage } from "@/lib/errors"
 import { applyServerError } from "@/lib/form"
-import { invalidateInventory, useSettings } from "@/lib/queries"
+import { invalidateInventory, usePkiDefaults } from "@/lib/queries"
 import type { CSRDetails, LeafProfile } from "@/lib/types"
 
 function schema(t: Translate) {
@@ -119,12 +119,12 @@ export function CsrDialog({
 }
 
 function CsrFormLoader(props: { issuerId?: string; onDone: () => void }) {
-  const settings = useSettings()
-  if (settings.isPending) return <FormSkeleton />
+  const defaults = usePkiDefaults()
+  if (defaults.isPending) return <FormSkeleton />
   return (
     <CsrForm
       {...props}
-      defaultDays={settings.data?.pki.defaultValidityDays ?? 397}
+      defaultDays={defaults.data?.defaultValidityDays ?? 397}
     />
   )
 }

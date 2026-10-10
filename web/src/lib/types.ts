@@ -9,9 +9,51 @@ export type AuthState = {
   setupAvailable?: boolean
   authenticated: boolean
   username?: string
+  user?: { id: string; username: string; admin: boolean }
+  /** Tenants the user works in; administrators get every tenant as owner. */
+  tenants?: Membership[]
 }
 
 export type Account = { username: string }
+
+export type Role = "owner" | "operator" | "viewer"
+
+export type Membership = { id: string; name: string; role: Role }
+
+export type Member = {
+  userId: string
+  username: string
+  role: Role
+  disabled?: boolean
+}
+
+export type Tenant = {
+  id: string
+  name: string
+  description?: string
+  createdAt: string
+  memberCount: number
+  recordCount: number
+  /** Detail responses only. */
+  role?: Role
+  members?: Member[]
+}
+
+export type User = {
+  id: string
+  username: string
+  admin: boolean
+  disabled: boolean
+  createdAt: string
+  tenants: Membership[]
+}
+
+export type UserChange = {
+  username?: string
+  password?: string
+  admin?: boolean
+  disabled?: boolean
+}
 
 export type VersionInfo = {
   version: string
@@ -85,6 +127,10 @@ export type CertRecord = {
   name: string
   issuerId?: string
   issuerName?: string
+  /** Owning tenant; absent for platform records. */
+  tenantId?: string
+  /** A platform CA shown to a tenant because its sub-CAs chain up to it. */
+  readOnly?: boolean
   profile: LeafProfile | CAProfile
   source: RecordSource
   status: CertStatus
@@ -122,6 +168,8 @@ export type CARequest = {
   keyAlgorithm: KeyAlgorithm
   validityDays: number
   pathLen?: number | null
+  /** Assigns a sub-CA of a platform CA to a tenant. */
+  tenantId?: string
 }
 
 export type CertRequest = {
@@ -187,14 +235,16 @@ export type Inspected = {
   error?: string
 }
 
+export type PkiDefaults = {
+  publicUrl: string
+  defaultKeyAlgorithm: KeyAlgorithm
+  defaultValidityDays: number
+  expiryWarningDays: number
+}
+
 export type Settings = {
   server: { host: string; port: number }
-  pki: {
-    publicUrl: string
-    defaultKeyAlgorithm: KeyAlgorithm
-    defaultValidityDays: number
-    expiryWarningDays: number
-  }
+  pki: PkiDefaults
   logging: { level: "debug" | "info" | "warn" | "error" }
   update: {
     enabled: boolean

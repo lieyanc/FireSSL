@@ -38,13 +38,15 @@ import {
   KeyAlgorithmSelect,
   ValidityInput,
 } from "@/features/certs/form-fields"
+import { TenantSelect } from "@/features/access/dialogs"
 import { SubjectFields } from "@/features/certs/subject-fields"
 import { subjectSchema } from "@/features/certs/subject-schema"
 import { useI18n, type Translate } from "@/i18n"
 import { api } from "@/lib/api"
 import { applyServerError } from "@/lib/form"
-import { invalidateInventory } from "@/lib/queries"
+import { invalidateDirectory, invalidateInventory, useAuthorities } from "@/lib/queries"
 import type { KeyAlgorithm } from "@/lib/types"
+import { useWorkspace } from "@/lib/workspace"
 
 const PATH_LENGTHS = ["unlimited", "0", "1", "2", "3"] as const
 
@@ -62,6 +64,7 @@ function schema(t: Translate) {
       keyAlgorithm: z.string(),
       validityDays: z.string().regex(/^\d+$/, t("certs.form.daysInvalid")),
       pathLen: z.enum(PATH_LENGTHS),
+      tenantId: z.string(),
     })
     .extend(subjectSchema(t).shape)
     .superRefine((v, ctx) => {
@@ -128,17 +131,22 @@ function CAForm({
   const { t } = useI18n()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const ws = useWorkspace()
+  const authorities = useAuthorities()
+  // Inside a tenant only sub-CAs of the tenant's own CAs can be created.
+  const fixedKind = !!issuerId || !ws.platform
   const resolver = React.useMemo(() => zodResolver(schema(t)), [t])
   const form = useForm<Values>({
     resolver,
     defaultValues: {
-      kind: issuerId ? "intermediate" : "root",
+      kind: fixedKind ? "intermediate" : "root",
       issuerId: issuerId ?? "",
       commonName: "",
       name: "",
       keyAlgorithm: "ecdsa-p384",
-      validityDays: issuerId ? "1825" : "3650",
-      pathLen: issuerId ? "0" : "unlimited",
+      validityDays: fixedKind ? "1825" : "3650",
+      pathLen: fixedKind ? "0" : "unlimited",
+      tenantId: "",
       organization: "",
       organizationalUnit: "",
       country: "",
@@ -148,6 +156,10 @@ function CAForm({
   })
   const { errors, isSubmitting } = form.formState
   const kind = useWatch({ control: form.control, name: "kind" })
+  const parentId = useWatch({ control: form.control, name: "issuerId" })
+  // A sub-CA of a tenant's CA always stays in that tenant.
+  const parentTenant = authorities.data?.find((a) => a.id === parentId)?.tenantId
+  const pickTenant = ws.platform && kind === "intermediate" && !parentTenant
 
   const onSubmit = form.handleSubmit(async (v) => {
     try {
@@ -165,8 +177,12 @@ function CAForm({
         keyAlgorithm: v.keyAlgorithm as KeyAlgorithm,
         validityDays: Number(v.validityDays),
         pathLen: v.pathLen === "unlimited" ? null : Number(v.pathLen),
+        tenantId: pickTenant && v.tenantId ? v.tenantId : undefined,
       })
-      await invalidateInventory(queryClient)
+      await Promise.all([
+        invalidateInventory(queryClient),
+        invalidateDirectory(queryClient),
+      ])
       toast.success(t("authorities.form.created", { name: ca.name }))
       onDone()
       navigate(`/authorities/${ca.id}`)
@@ -178,7 +194,7 @@ function CAForm({
   return (
     <form onSubmit={onSubmit} noValidate className="flex flex-col gap-6">
       <FieldGroup>
-        {!issuerId && (
+        {!fixedKind && (
           <Controller
             control={form.control}
             name="kind"
@@ -231,6 +247,25 @@ function CAForm({
                   exclude="no-sub-ca"
                 />
                 <FieldError errors={[errors.issuerId]} />
+              </Field>
+            )}
+          />
+        )}
+        {pickTenant && (
+          <Controller
+            control={form.control}
+            name="tenantId"
+            render={({ field }) => (
+              <Field>
+                <FieldLabel htmlFor="ca-tenant">
+                  {t("access.caTenant")}
+                </FieldLabel>
+                <TenantSelect
+                  id="ca-tenant"
+                  value={field.value}
+                  onChange={field.onChange}
+                />
+                <FieldDescription>{t("access.caTenantHint")}</FieldDescription>
               </Field>
             )}
           />

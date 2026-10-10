@@ -10,13 +10,18 @@ import type {
   ImportRequest,
   Inspected,
   Overview,
+  PkiDefaults,
   RecordKind,
   RenewRequest,
   RevocationReason,
+  Role,
   Settings,
   SettingsInput,
+  Tenant,
   UpdateCheckResult,
   UpdateStatus,
+  User,
+  UserChange,
   VersionInfo,
 } from "@/lib/types"
 
@@ -53,6 +58,13 @@ let unauthorizedListener: UnauthorizedListener | null = null
 /** Registers the handler called whenever any request comes back 401. */
 export function setUnauthorizedListener(listener: UnauthorizedListener | null) {
   unauthorizedListener = listener
+}
+
+let tenantId = ""
+
+/** Sets the tenant every request works in; "" is the whole platform. */
+export function setApiTenant(id: string) {
+  tenantId = id
 }
 
 type Query = Record<string, string | number | undefined | null>
@@ -93,6 +105,7 @@ async function send(
   options: { body?: unknown; query?: Query; signal?: AbortSignal } = {}
 ): Promise<Response> {
   const headers: Record<string, string> = { Accept: "application/json" }
+  if (tenantId) headers["X-FireSSL-Tenant"] = tenantId
   const init: RequestInit = {
     method,
     headers,
@@ -203,11 +216,16 @@ export const api = {
     }) => post<Account>("/api/auth/password", body),
   },
   overview: () => get<Overview>("/api/overview"),
+  pkiDefaults: () => get<PkiDefaults>("/api/pki/defaults"),
   authorities: {
     ...records("ca"),
     create: (body: CARequest) => post<CertRecord>("/api/authorities", body),
     import: (body: ImportRequest) =>
       post<CertRecord>("/api/authorities/import", body),
+    assignTenant: (id: string, tenantId: string) =>
+      post<CertRecord>(`/api/authorities/${encodeURIComponent(id)}/tenant`, {
+        tenantId,
+      }),
   },
   certificates: {
     ...records("leaf"),
@@ -222,6 +240,37 @@ export const api = {
   },
   inspect: (pem: string) =>
     post<{ items: Inspected[] }>("/api/inspect", { pem }).then((r) => r.items),
+  tenants: {
+    list: () =>
+      get<{ items: Tenant[] }>("/api/tenants").then((r) => r.items),
+    get: (id: string) => get<Tenant>(`/api/tenants/${encodeURIComponent(id)}`),
+    create: (body: { name: string; description?: string }) =>
+      post<Tenant>("/api/tenants", body),
+    update: (id: string, body: { name: string; description?: string }) =>
+      request<Tenant>("PATCH", `/api/tenants/${encodeURIComponent(id)}`, {
+        body,
+      }),
+    remove: (id: string) =>
+      request<void>("DELETE", `/api/tenants/${encodeURIComponent(id)}`),
+    setMember: (id: string, username: string, role: Role) =>
+      request<Tenant>("PUT", `/api/tenants/${encodeURIComponent(id)}/members`, {
+        body: { username, role },
+      }),
+    removeMember: (id: string, userId: string) =>
+      request<Tenant>(
+        "DELETE",
+        `/api/tenants/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`
+      ),
+  },
+  users: {
+    list: () => get<{ items: User[] }>("/api/users").then((r) => r.items),
+    create: (body: { username: string; password: string; admin: boolean }) =>
+      post<User>("/api/users", body),
+    update: (id: string, body: UserChange) =>
+      request<User>("PATCH", `/api/users/${encodeURIComponent(id)}`, { body }),
+    remove: (id: string) =>
+      request<void>("DELETE", `/api/users/${encodeURIComponent(id)}`),
+  },
   settings: {
     get: () => get<Settings>("/api/settings"),
     update: (body: SettingsInput) =>

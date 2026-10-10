@@ -19,14 +19,18 @@ import {
 } from "@/components/ui/sidebar"
 import {
   isNavActive,
+  membersNav,
+  NAV_ADMIN,
   NAV_MAIN,
   NAV_SECONDARY,
   NAV_TOOLS,
   type NavItem,
 } from "@/components/layout/nav"
 import { NavUser } from "@/components/layout/nav-user"
+import { WorkspaceSwitcher } from "@/components/layout/workspace-switcher"
 import { useI18n } from "@/i18n"
 import { useOverview } from "@/lib/queries"
+import { useWorkspace } from "@/lib/workspace"
 
 function NavGroup({
   label,
@@ -40,7 +44,8 @@ function NavGroup({
   const { t } = useI18n()
   const { pathname } = useLocation()
   const { isMobile, setOpenMobile } = useSidebar()
-  const overview = useOverview()
+  const ws = useWorkspace()
+  const overview = useOverview(ws.admin || !!ws.tenant)
   const attention =
     (overview.data?.expiring ?? 0) + (overview.data?.expired ?? 0)
 
@@ -79,6 +84,11 @@ function NavGroup({
 export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const { t } = useI18n()
   const { isMobile, setOpenMobile } = useSidebar()
+  const ws = useWorkspace()
+  const tools =
+    ws.tenant && ws.can("members")
+      ? [...NAV_TOOLS, membersNav(ws.tenant.id)]
+      : NAV_TOOLS
 
   return (
     <Sidebar collapsible="offcanvas" {...props}>
@@ -98,10 +108,14 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
+        {(ws.admin || ws.tenants.length > 0) && <WorkspaceSwitcher />}
       </SidebarHeader>
       <SidebarContent>
         <NavGroup label={t("shell.nav.pki")} items={NAV_MAIN} />
-        <NavGroup label={t("shell.nav.tools")} items={NAV_TOOLS} />
+        <NavGroup label={t("shell.nav.tools")} items={tools} />
+        {ws.admin && (
+          <NavGroup label={t("shell.nav.admin")} items={NAV_ADMIN} />
+        )}
         <NavGroup items={NAV_SECONDARY} className="mt-auto" />
       </SidebarContent>
       <SidebarFooter>

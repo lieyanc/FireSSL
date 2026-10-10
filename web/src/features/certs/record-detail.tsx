@@ -2,6 +2,8 @@ import { Link } from "react-router"
 import {
   ArrowRightIcon,
   BanIcon,
+  BuildingIcon,
+  LockIcon,
   ChevronRightIcon,
   ClockAlertIcon,
   FileSearchIcon,
@@ -22,12 +24,51 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { StatusBadge } from "@/features/certs/status-badge"
 import { useI18n } from "@/i18n"
 import { isApiError } from "@/lib/api"
 import { daysUntil } from "@/lib/format"
 import { useAuthorities } from "@/lib/queries"
 import type { CertRecord } from "@/lib/types"
+import { useWorkspace } from "@/lib/workspace"
+
+/**
+ * Who a record belongs to: on the platform workspace the owning tenant, in a
+ * tenant the platform CAs it can only read.
+ */
+export function OwnerBadge({ record }: { record: CertRecord }) {
+  const { t } = useI18n()
+  const ws = useWorkspace()
+  if (record.readOnly) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge variant="secondary" className="gap-1">
+            <LockIcon />
+            {t("access.platformManaged")}
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-64">
+          {t("access.platformManagedHint")}
+        </TooltipContent>
+      </Tooltip>
+    )
+  }
+  if (ws.platform && record.tenantId) {
+    return (
+      <Badge variant="secondary" className="gap-1">
+        <BuildingIcon />
+        {ws.tenantName(record.tenantId) ?? record.tenantId}
+      </Badge>
+    )
+  }
+  return null
+}
 
 /** Root → … → this record, linking each known CA. */
 export function ChainPath({ record }: { record: CertRecord }) {
@@ -65,6 +106,7 @@ export function RecordTitle({ record }: { record: CertRecord }) {
       {record.source !== "generated" && (
         <Badge variant="secondary">{t(`common.source.${record.source}`)}</Badge>
       )}
+      <OwnerBadge record={record} />
     </span>
   )
 }

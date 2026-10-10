@@ -48,8 +48,8 @@ import {
 import { useI18n, type Translate } from "@/i18n"
 import { api, isApiError } from "@/lib/api"
 import { applyServerError } from "@/lib/form"
-import { invalidateInventory, useSettings } from "@/lib/queries"
-import type { KeyAlgorithm, LeafProfile, Settings } from "@/lib/types"
+import { invalidateInventory, usePkiDefaults } from "@/lib/queries"
+import type { KeyAlgorithm, LeafProfile, PkiDefaults } from "@/lib/types"
 
 function schema(t: Translate) {
   return z
@@ -122,9 +122,9 @@ export function IssueDialog({
 
 /** Waits for the configured defaults so the form starts from them. */
 function IssueFormLoader(props: { issuerId?: string; onDone: () => void }) {
-  const settings = useSettings()
-  if (settings.isPending) return <FormSkeleton />
-  return <IssueForm {...props} defaults={settings.data?.pki} />
+  const defaults = usePkiDefaults()
+  if (defaults.isPending) return <FormSkeleton />
+  return <IssueForm {...props} defaults={defaults.data} />
 }
 
 function IssueForm({
@@ -134,7 +134,7 @@ function IssueForm({
 }: {
   issuerId?: string
   onDone: () => void
-  defaults?: Settings["pki"]
+  defaults?: PkiDefaults
 }) {
   const { t } = useI18n()
   const navigate = useNavigate()

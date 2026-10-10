@@ -41,6 +41,7 @@ import { CERT_STATUSES } from "@/features/certs/options"
 import { CertificatesTable } from "@/features/certs/tables"
 import { useI18n } from "@/i18n"
 import { useAuthorities, useCertificates } from "@/lib/queries"
+import { useWorkspace } from "@/lib/workspace"
 import type { CertRecord, CertStatus } from "@/lib/types"
 
 const ALL = "all"
@@ -67,6 +68,7 @@ export default function CertificatesPage() {
   const authorities = useAuthorities()
   const [dialog, setDialog] = React.useState<"issue" | "csr" | null>(null)
   const close = (open: boolean) => !open && setDialog(null)
+  const canIssue = useWorkspace().can("issue")
 
   const search = params.get("q") ?? ""
   const status = (params.get("status") as CertStatus | null) ?? ALL
@@ -105,16 +107,18 @@ export default function CertificatesPage() {
         title={t("certs.title")}
         description={t("certs.description")}
         actions={
-          <>
-            <Button variant="outline" onClick={() => setDialog("csr")}>
-              <FileSignatureIcon data-icon="inline-start" />
-              {t("certs.csr.short")}
-            </Button>
-            <Button onClick={() => setDialog("issue")}>
-              <FilePlus2Icon data-icon="inline-start" />
-              {t("certs.issue.short")}
-            </Button>
-          </>
+          canIssue && (
+            <>
+              <Button variant="outline" onClick={() => setDialog("csr")}>
+                <FileSignatureIcon data-icon="inline-start" />
+                {t("certs.csr.short")}
+              </Button>
+              <Button onClick={() => setDialog("issue")}>
+                <FilePlus2Icon data-icon="inline-start" />
+                {t("certs.issue.short")}
+              </Button>
+            </>
+          )
         }
       />
 
@@ -216,16 +220,18 @@ export default function CertificatesPage() {
                 <EmptyTitle>{t("certs.empty")}</EmptyTitle>
                 <EmptyDescription>{t("certs.emptyHint")}</EmptyDescription>
               </EmptyHeader>
-              <EmptyContent className="flex-row justify-center">
-                <Button onClick={() => setDialog("issue")}>
-                  <FilePlus2Icon data-icon="inline-start" />
-                  {t("certs.issue.short")}
-                </Button>
-                <Button variant="outline" onClick={() => setDialog("csr")}>
-                  <FileSignatureIcon data-icon="inline-start" />
-                  {t("certs.csr.short")}
-                </Button>
-              </EmptyContent>
+              {canIssue && (
+                <EmptyContent className="flex-row justify-center">
+                  <Button onClick={() => setDialog("issue")}>
+                    <FilePlus2Icon data-icon="inline-start" />
+                    {t("certs.issue.short")}
+                  </Button>
+                  <Button variant="outline" onClick={() => setDialog("csr")}>
+                    <FileSignatureIcon data-icon="inline-start" />
+                    {t("certs.csr.short")}
+                  </Button>
+                </EmptyContent>
+              )}
             </Empty>
           ) : filtered.length === 0 ? (
             <Empty className="py-16">

@@ -29,6 +29,10 @@ export const qk = {
   record: (kind: RecordKind, id: string) =>
     ["records", kind, "detail", id] as const,
   settings: ["settings"] as const,
+  pkiDefaults: ["pki", "defaults"] as const,
+  tenants: ["tenants"] as const,
+  tenant: (id: string) => ["tenants", id] as const,
+  users: ["users"] as const,
   updateStatus: ["update", "status"] as const,
 }
 
@@ -51,8 +55,8 @@ export function useVersion() {
   })
 }
 
-export function useOverview() {
-  return useQuery({ queryKey: qk.overview, queryFn: api.overview })
+export function useOverview(enabled = true) {
+  return useQuery({ queryKey: qk.overview, queryFn: api.overview, enabled })
 }
 
 export function useAuthorities() {
@@ -80,6 +84,40 @@ export function useRecord(kind: RecordKind, id: string) {
 
 export function useSettings() {
   return useQuery({ queryKey: qk.settings, queryFn: api.settings.get })
+}
+
+/** Issuance defaults, readable by every user. */
+export function usePkiDefaults() {
+  return useQuery({
+    queryKey: qk.pkiDefaults,
+    queryFn: api.pkiDefaults,
+    staleTime: 60_000,
+  })
+}
+
+export function useTenants() {
+  return useQuery({ queryKey: qk.tenants, queryFn: api.tenants.list })
+}
+
+export function useTenant(id: string) {
+  return useQuery({
+    queryKey: qk.tenant(id),
+    queryFn: () => api.tenants.get(id),
+    enabled: !!id,
+  })
+}
+
+export function useUsers() {
+  return useQuery({ queryKey: qk.users, queryFn: api.users.list })
+}
+
+/** Refreshes tenants, users and the caller's memberships after a change. */
+export function invalidateDirectory(client: QueryClient = queryClient) {
+  return Promise.all([
+    client.invalidateQueries({ queryKey: qk.tenants }),
+    client.invalidateQueries({ queryKey: qk.users }),
+    client.invalidateQueries({ queryKey: qk.authState }),
+  ])
 }
 
 /** Refreshes every view of the inventory after a change. */

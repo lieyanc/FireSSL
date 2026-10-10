@@ -19,13 +19,19 @@ import { ImportCADialog } from "@/features/certs/import-ca-dialog"
 import { AuthoritiesTable } from "@/features/certs/tables"
 import { useI18n } from "@/i18n"
 import { useAuthorities } from "@/lib/queries"
+import { useWorkspace } from "@/lib/workspace"
 
 export default function AuthoritiesPage() {
   const { t } = useI18n()
   const authorities = useAuthorities()
+  const ws = useWorkspace()
   const [dialog, setDialog] = React.useState<"ca" | "import" | null>(null)
   const close = (open: boolean) => !open && setDialog(null)
   const items = authorities.data ?? []
+  // Roots and imports are platform business; tenant owners add sub-CAs.
+  const canCreate =
+    ws.platform ||
+    (ws.can("manageCa") && items.some((ca) => !ca.readOnly && ca.hasKey))
 
   return (
     <PageContainer>
@@ -34,14 +40,20 @@ export default function AuthoritiesPage() {
         description={t("authorities.description")}
         actions={
           <>
-            <Button variant="outline" onClick={() => setDialog("import")}>
-              <UploadIcon data-icon="inline-start" />
-              {t("authorities.import.short")}
-            </Button>
-            <Button onClick={() => setDialog("ca")}>
-              <ShieldPlusIcon data-icon="inline-start" />
-              {t("authorities.newCa")}
-            </Button>
+            {ws.platform && (
+              <Button variant="outline" onClick={() => setDialog("import")}>
+                <UploadIcon data-icon="inline-start" />
+                {t("authorities.import.short")}
+              </Button>
+            )}
+            {canCreate && (
+              <Button onClick={() => setDialog("ca")}>
+                <ShieldPlusIcon data-icon="inline-start" />
+                {ws.platform
+                  ? t("authorities.newCa")
+                  : t("authorities.newSubCa")}
+              </Button>
+            )}
           </>
         }
       />
@@ -58,6 +70,18 @@ export default function AuthoritiesPage() {
                 <Skeleton key={i} className="h-12" />
               ))}
             </div>
+          ) : items.length === 0 && !ws.platform ? (
+            <Empty className="py-16">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <ShieldIcon />
+                </EmptyMedia>
+                <EmptyTitle>{t("access.tenantEmpty.title")}</EmptyTitle>
+                <EmptyDescription>
+                  {t("access.tenantEmpty.description")}
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ) : items.length === 0 ? (
             <Empty className="py-16">
               <EmptyHeader>
@@ -86,7 +110,9 @@ export default function AuthoritiesPage() {
         </Card>
       )}
       <CAFormDialog open={dialog === "ca"} onOpenChange={close} />
-      <ImportCADialog open={dialog === "import"} onOpenChange={close} />
+      {ws.platform && (
+        <ImportCADialog open={dialog === "import"} onOpenChange={close} />
+      )}
     </PageContainer>
   )
 }

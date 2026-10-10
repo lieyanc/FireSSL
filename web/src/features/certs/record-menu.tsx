@@ -3,6 +3,7 @@ import { Link } from "react-router"
 import { useQueryClient } from "@tanstack/react-query"
 import {
   BanIcon,
+  BuildingIcon,
   DownloadIcon,
   EyeIcon,
   FilePlus2Icon,
@@ -30,6 +31,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Spinner } from "@/components/ui/spinner"
+import { AssignTenantDialog } from "@/features/access/dialogs"
 import { CAFormDialog } from "@/features/certs/ca-form-dialog"
 import { CsrDialog } from "@/features/certs/csr-dialog"
 import { IssueDialog } from "@/features/certs/issue-dialog"
@@ -45,6 +47,7 @@ import { recordsApi } from "@/lib/api"
 import { toastError } from "@/lib/errors"
 import { invalidateInventory } from "@/lib/queries"
 import type { CertRecord, ExportFormat } from "@/lib/types"
+import { useWorkspace } from "@/lib/workspace"
 
 type DownloadItem = {
   format: ExportFormat | "p12"
@@ -52,7 +55,8 @@ type DownloadItem = {
   hint: MessageKey
 }
 
-function downloadItems(r: CertRecord): DownloadItem[][] {
+/** Export formats; private keys only for callers who may manage the record. */
+function downloadItems(r: CertRecord, withKey: boolean): DownloadItem[][] {
   const hasIssuer = !!r.issuerId
   const cert: DownloadItem[] = [
     {
@@ -84,7 +88,8 @@ function downloadItems(r: CertRecord): DownloadItem[][] {
       hint: "certs.download.derHint",
     },
   ]
-  const key: DownloadItem[] = r.hasKey
+  const key: DownloadItem[] =
+    r.hasKey && withKey
     ? [
         {
           format: "key",
@@ -105,6 +110,7 @@ function downloadItems(r: CertRecord): DownloadItem[][] {
       hint: r.hasKey ? "certs.download.zipHint" : "certs.download.zipNoKeyHint",
     },
   ]
+  const bundles = withKey ? bundle : []
   const crl: DownloadItem[] =
     r.kind === "ca" && r.hasKey
       ? [
@@ -120,7 +126,7 @@ function downloadItems(r: CertRecord): DownloadItem[][] {
           },
         ]
       : []
-  return [cert, key, bundle, crl].filter((g) => g.length > 0)
+  return [cert, key, bundles, crl].filter((g) => g.length > 0)
 }
 
 function useDownload(record: CertRecord, onPkcs12: () => void) {
@@ -154,7 +160,8 @@ function DownloadEntries({
   onSelect: (format: DownloadItem["format"]) => void
 }) {
   const { t } = useI18n()
-  return downloadItems(record).map((group, i) => (
+  const { canManage } = useWorkspace()
+  return downloadItems(record, canManage(record)).map((group, i) => (
     <React.Fragment key={i}>
       {i > 0 && <DropdownMenuSeparator />}
       <DropdownMenuGroup>
@@ -211,6 +218,7 @@ type DialogName =
   | "issue"
   | "csr"
   | "subca"
+  | "assign"
   | null
 
 /**
@@ -231,9 +239,18 @@ export function RecordMenu({
   const [dialog, setDialog] = React.useState<DialogName>(null)
   const close = (open: boolean) => !open && setDialog(null)
   const { download } = useDownload(record, () => setDialog("p12"))
+  const ws = useWorkspace()
   const isCA = record.kind === "ca"
-  const issuing = isCA && canIssue(record)
+  const manage = ws.canManage(record)
+  const issuing =
+    isCA && canIssue(record) && !record.readOnly && ws.can("issue")
+  const subCA = issuing && ws.can("manageCa") && record.details.pathLen !== 0
+  const assignable = ws.admin && isCA && record.profile === "intermediate"
   const base = isCA ? "/authorities" : "/certificates"
+  const actions = issuing || manage || assignable
+
+  // Nothing but viewing and downloading: no menu on detail pages.
+  if (!inTable && !actions) return null
 
   const remove = async () => {
     try {
@@ -285,7 +302,7 @@ export function RecordMenu({
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
               </DropdownMenuGroup>
-              <DropdownMenuSeparator />
+              {actions && <DropdownMenuSeparator />}
             </>
           )}
           <DropdownMenuGroup>
@@ -301,42 +318,55 @@ export function RecordMenu({
                 {t("certs.csr.short")}
               </DropdownMenuItem>
             )}
-            {issuing && record.details.pathLen !== 0 && (
+            {subCA && (
               <DropdownMenuItem onSelect={() => setDialog("subca")}>
                 <NetworkIcon />
                 {t("authorities.newSubCa")}
               </DropdownMenuItem>
             )}
-            {!isCA && inTable && (
+            {assignable && (
+              <DropdownMenuItem onSelect={() => setDialog("assign")}>
+                <BuildingIcon />
+                {t("access.assign.action")}
+              </DropdownMenuItem>
+            )}
+            {manage && !isCA && inTable && (
               <DropdownMenuItem onSelect={() => setDialog("renew")}>
                 <RefreshCwIcon />
                 {t("certs.renew.short")}
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem onSelect={() => setDialog("rename")}>
-              <PencilIcon />
-              {t("certs.rename.short")}
-            </DropdownMenuItem>
-          </DropdownMenuGroup>
-          <DropdownMenuSeparator />
-          <DropdownMenuGroup>
-            {record.status !== "revoked" && !(isCA && !record.issuerId) && (
-              <DropdownMenuItem
-                variant="destructive"
-                onSelect={() => setDialog("revoke")}
-              >
-                <BanIcon />
-                {t("certs.revoke.short")}
+            {manage && (
+              <DropdownMenuItem onSelect={() => setDialog("rename")}>
+                <PencilIcon />
+                {t("certs.rename.short")}
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem
-              variant="destructive"
-              onSelect={() => setDialog("delete")}
-            >
-              <Trash2Icon />
-              {t("common.actions.delete")}
-            </DropdownMenuItem>
           </DropdownMenuGroup>
+          {manage && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                {record.status !== "revoked" &&
+                  !(isCA && !record.issuerId) && (
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onSelect={() => setDialog("revoke")}
+                    >
+                      <BanIcon />
+                      {t("certs.revoke.short")}
+                    </DropdownMenuItem>
+                  )}
+                <DropdownMenuItem
+                  variant="destructive"
+                  onSelect={() => setDialog("delete")}
+                >
+                  <Trash2Icon />
+                  {t("common.actions.delete")}
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
 
@@ -380,6 +410,13 @@ export function RecordMenu({
             issuerId={record.id}
           />
         </>
+      )}
+      {assignable && (
+        <AssignTenantDialog
+          record={record}
+          open={dialog === "assign"}
+          onOpenChange={close}
+        />
       )}
       <ConfirmDialog
         open={dialog === "delete"}
